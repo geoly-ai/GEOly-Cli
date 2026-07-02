@@ -37,7 +37,8 @@ const TARGETS = {
 };
 
 function sh(cmd, opts = {}) {
-  return execSync(cmd, { stdio: ['ignore', 'pipe', 'inherit'], encoding: 'utf8', cwd: ROOT, ...opts }).trim();
+  const out = execSync(cmd, { stdio: ['ignore', 'pipe', 'inherit'], encoding: 'utf8', cwd: ROOT, ...opts });
+  return out == null ? '' : out.toString().trim(); // stdout:'ignore' yields null
 }
 
 function findBun() {
