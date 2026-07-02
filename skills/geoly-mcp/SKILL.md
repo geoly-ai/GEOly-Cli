@@ -3,7 +3,7 @@ name: geoly-mcp
 description: "Use when querying or reporting on AI brand visibility through the GEOly MCP server — picking the right tool, following the org/brand discovery flow, quoting the correct KPI caliber, and avoiding metric-definition pitfalls. Triggers: GEOly; GEO / AI-visibility reporting; citation rate, mention rate, AIGVR, Share of Model; daily trends; competitor, category whitespace, brand momentum; any call to get_brand_overview / query_analytics / get_prompt_* / get_citation_* / compare_public_brands / get_category_* / get_public_* tools."
 metadata:
   author: geoly
-  version: "0.1.5"
+  version: "0.2.0"
 ---
 
 # GEOly MCP
@@ -120,6 +120,38 @@ public/report tools) and paginate (`currentPage == totalPages`) instead of assum
   **standard** (write) profile, chosen on the OAuth consent screen; the default is read-only, and
   the legacy `geom_` static token is always read-only. `trigger_prompt` **consumes credits**.
 - **Dates**: call `get_current_date` before building date ranges; `query_analytics` ranges ≤ 366 days.
+
+## GEOly CLI — bulk & scripted access (optional; prefer for loops/exports)
+
+The same tool surface is also a terminal CLI built for agents
+([github.com/geoly-ai/GEOly-Cli](https://github.com/geoly-ai/GEOly-Cli)). Prefer it over MCP
+tool calls when you need **loops over many prompts/brands, large exports piped to files, or
+deterministic CI scripts** — results go to files instead of your context. For one-off
+questions in a chat session, keep using the MCP tools.
+
+**Bootstrap (only in a local shell environment; skip in cloud/headless sessions):**
+
+1. If `geoly` is not on PATH, install it — zero-interaction, no sudo/admin:
+   - macOS/Linux: `curl -fsSL https://geoly.ai/install.sh | sh`
+   - Windows (from any shell): `powershell -ExecutionPolicy Bypass -c "irm https://geoly.ai/install.ps1 | iex"`
+   - Mirror if the short domain path is unavailable: swap in
+     `https://raw.githubusercontent.com/geoly-ai/GEOly-Cli/main/install.sh` (or `install.ps1`).
+2. **There is no login step.** The first `geoly call` opens the user's browser and continues
+   after they approve — a slow return while the browser is open is normal; wait, don't treat
+   it as a failure. In CI/headless, set `GEOLY_TOKEN` (read-only `geom_` token) instead;
+   with `CI=true` the CLI fails fast (exit 3) rather than blocking.
+
+**Usage pattern:**
+
+- `geoly tools --json` first — tool names come from the server at runtime; never assume.
+- `geoly schema <tool>` for exact parameters; `geoly call <tool> --help` also works.
+- `geoly call <tool> --<param> <value> ...` — flags use schema parameter names **verbatim**
+  (`--brand_id`, `--time_range 30d`); arrays/objects take JSON strings; whole-object via
+  `--data '<json>'` or stdin via `--input -`.
+- stdout is result JSON only (pipe to `jq`/files); status goes to stderr. Exit codes:
+  0 ok / 1 tool error / 2 usage / 3 auth / 4 rate-limited / 5 subscription / 6 upstream.
+- Windows gotcha: `.env` files are not read — persist tokens with
+  `[Environment]::SetEnvironmentVariable('GEOLY_TOKEN','geom_…','User')`.
 
 ## Tool selection — question → tool
 

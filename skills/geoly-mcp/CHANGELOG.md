@@ -2,6 +2,16 @@
 
 All notable changes to the `geoly-mcp` agent skill.
 
+## 0.2.0
+
+- **GEOly CLI section (agent bootstrap).** The tool surface now has a terminal projection
+  ([geoly-ai/GEOly-Cli](https://github.com/geoly-ai/GEOly-Cli)) built for agents. New SKILL.md
+  section teaches: when to prefer the CLI over MCP calls (loops / large exports / CI), the
+  zero-interaction install commands (curl / Windows PowerShell irm, with GitHub mirror), lazy
+  auth semantics (no login step — first `geoly call` opens the browser; slow return is normal;
+  `GEOLY_TOKEN` for CI), the probe-first usage pattern (`geoly tools --json` → `geoly schema`
+  → `geoly call`), stable exit codes, and the Windows env-var gotcha.
+
 ## 0.1.5
 
 - **Platform dimension across the public tools.** Public facts are sliced by AI platform

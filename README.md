@@ -27,6 +27,10 @@ irm https://geoly.ai/install.ps1 | iex
 Self-contained single binary (no Node, no Python, no sudo — installs to `~/.local/bin`).
 Targets: macOS (arm64/x64), Linux (x64/arm64), Windows (x64). Update any time with `geoly upgrade`.
 
+Mirror (identical scripts, straight from this repo):
+`curl -fsSL https://raw.githubusercontent.com/geoly-ai/GEOly-Cli/main/install.sh | sh` ·
+Windows: `irm https://raw.githubusercontent.com/geoly-ai/GEOly-Cli/main/install.ps1 | iex`
+
 ## Quick start
 
 ```sh
