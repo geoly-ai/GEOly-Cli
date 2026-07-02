@@ -1,0 +1,23 @@
+{
+  "name": "geoly-cli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "GEOly CLI — the GEOly command-line interface, built for agents. https://www.geoly.ai",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx src/bin.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "clipanion": "4.0.0-rc.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "esbuild": "^0.24.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0"
+  }
+}
