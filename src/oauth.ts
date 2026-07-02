@@ -188,7 +188,7 @@ async function runAuthorizationFlow(ctx: Ctx): Promise<StoredTokens> {
   const challenge = base64url(crypto.createHash('sha256').update(verifier).digest());
   const state = base64url(crypto.randomBytes(16));
 
-  const { server, port, waitForCode } = await startLoopback(client.redirectUris);
+  const { server, port, waitForCode } = await startLoopback(client.redirectUris, state);
   const redirectUri = `http://127.0.0.1:${port}/callback`;
 
   const authorizeUrl = new URL(meta.authorization_endpoint);
@@ -207,11 +207,7 @@ async function runAuthorizationFlow(ctx: Ctx): Promise<StoredTokens> {
 
   let code: string;
   try {
-    const result = await waitForCode(AUTH_TIMEOUT_MS);
-    if (result.state !== state) {
-      throw new GeolyError('auth_expired', 'OAuth state mismatch — aborting for safety');
-    }
-    code = result.code;
+    code = (await waitForCode(AUTH_TIMEOUT_MS)).code;
   } finally {
     server.close();
   }
@@ -221,6 +217,33 @@ async function runAuthorizationFlow(ctx: Ctx): Promise<StoredTokens> {
   saveCredentials(ctx, creds);
   warn('geoly: authorized ✓');
   return tokens;
+}
+
+/**
+ * Defense in depth for the discovery chain: every URL we learned from
+ * headers/metadata must be https on the endpoint's own origin or *.geoly.ai
+ * (plain http only for localhost dev endpoints). Otherwise a compromised
+ * response could redirect the browser/token exchange to an attacker host.
+ */
+function assertTrustedAuthUrl(url: string | undefined, ctx: Ctx, what: string): string {
+  if (!url) throw new GeolyError('upstream_unavailable', `OAuth discovery returned no ${what}`);
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    throw new GeolyError('upstream_unavailable', `OAuth discovery returned an invalid ${what}: ${url}`);
+  }
+  const endpoint = new URL(ctx.endpoint);
+  const localDev = ['localhost', '127.0.0.1', '::1'].includes(endpoint.hostname);
+  const sameOrigin = u.origin === endpoint.origin;
+  const geolyHost = u.protocol === 'https:' && (u.hostname === 'geoly.ai' || u.hostname.endsWith('.geoly.ai'));
+  const httpsOk = u.protocol === 'https:' || (localDev && sameOrigin);
+  if (!httpsOk || !(sameOrigin || geolyHost)) {
+    throw new GeolyError('upstream_unavailable', `Refusing untrusted ${what}: ${u.origin}`, {
+      hint: 'OAuth endpoints must be https on the GEOly origin.',
+    });
+  }
+  return url;
 }
 
 /** RFC 9728 → RFC 8414 discovery starting from the MCP endpoint itself. */
@@ -238,15 +261,16 @@ async function discover(ctx: Ctx): Promise<AsMetadata> {
     });
     const challenge = probe.headers.get('www-authenticate') ?? '';
     const m = challenge.match(/resource_metadata="([^"]+)"/);
-    if (m?.[1]) prmUrl = m[1];
+    if (m?.[1]) prmUrl = assertTrustedAuthUrl(m[1], ctx, 'resource metadata URL');
     // Drain the probe body; we only wanted the headers.
     await probe.arrayBuffer().catch(() => undefined);
-  } catch {
+  } catch (err) {
+    if (err instanceof GeolyError) throw err;
     /* endpoint unreachable — surfaced below when metadata fetch fails */
   }
 
   const prm = await fetchJson<{ authorization_servers?: string[] }>(prmUrl);
-  const asBase = (prm?.authorization_servers?.[0] ?? origin).replace(/\/$/, '');
+  const asBase = assertTrustedAuthUrl(prm?.authorization_servers?.[0] ?? origin, ctx, 'authorization server').replace(/\/$/, '');
   const asMeta =
     (await fetchJson<AsMetadata>(`${asBase}/.well-known/oauth-authorization-server`)) ??
     (await fetchJson<AsMetadata>(`${origin}/.well-known/oauth-authorization-server`));
@@ -255,6 +279,10 @@ async function discover(ctx: Ctx): Promise<AsMetadata> {
       hint: `Checked ${prmUrl} — is ${origin} reachable?`,
     });
   }
+  // Every endpoint we will send the browser / auth code to must be trusted.
+  assertTrustedAuthUrl(asMeta.authorization_endpoint, ctx, 'authorization endpoint');
+  assertTrustedAuthUrl(asMeta.token_endpoint, ctx, 'token endpoint');
+  if (asMeta.registration_endpoint) assertTrustedAuthUrl(asMeta.registration_endpoint, ctx, 'registration endpoint');
   return asMeta;
 }
 
@@ -354,17 +382,22 @@ async function exchangeCode(
 interface LoopbackHandle {
   server: http.Server;
   port: number;
-  waitForCode: (timeoutMs: number) => Promise<{ code: string; state: string }>;
+  waitForCode: (timeoutMs: number) => Promise<{ code: string }>;
 }
 
-/** Bind the first free port from the registered set and wait for /callback. */
-async function startLoopback(registered: string[]): Promise<LoopbackHandle> {
+/**
+ * Bind the first free port from the registered set and wait for /callback.
+ * Requests whose state does not match are ignored (400) and we keep waiting —
+ * a local process spamming the well-known port must not be able to abort the
+ * real authorization (it cannot forge the state, so it cannot inject a code).
+ */
+async function startLoopback(registered: string[], expectedState: string): Promise<LoopbackHandle> {
   const ports = registered
     .map((u) => Number(new URL(u).port))
     .filter((p) => Number.isFinite(p) && p > 0);
-  let resolveCode: (v: { code: string; state: string }) => void;
+  let resolveCode: (v: { code: string }) => void;
   let rejectCode: (e: Error) => void;
-  const codePromise = new Promise<{ code: string; state: string }>((res, rej) => {
+  const codePromise = new Promise<{ code: string }>((res, rej) => {
     resolveCode = res;
     rejectCode = rej;
   });
@@ -378,6 +411,10 @@ async function startLoopback(registered: string[]): Promise<LoopbackHandle> {
     const err = url.searchParams.get('error');
     const code = url.searchParams.get('code');
     const state = url.searchParams.get('state') ?? '';
+    if (state !== expectedState) {
+      res.writeHead(400, { 'content-type': 'text/plain' }).end('state mismatch — ignored');
+      return; // keep listening for the genuine callback
+    }
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     res.end(
       `<html><body style="font-family:system-ui;text-align:center;padding-top:4rem">` +
@@ -385,7 +422,7 @@ async function startLoopback(registered: string[]): Promise<LoopbackHandle> {
         `<p>You can close this window and return to your terminal.</p></body></html>`,
     );
     if (err) rejectCode(new GeolyError('auth_expired', `Authorization was denied: ${err}`));
-    else if (code) resolveCode({ code, state });
+    else if (code) resolveCode({ code });
   });
 
   const port = await bindFirstFree(server, ports);
@@ -435,9 +472,14 @@ function bindFirstFree(server: http.Server, ports: number[]): Promise<number> {
 
 /** Open the system browser, best-effort; the URL is always printed as fallback. */
 function openBrowser(url: string): void {
+  // Never hand a non-web scheme to the OS opener (file:, javascript:, custom
+  // handlers) — the URL is derived from server metadata, keep the blast radius.
+  if (!/^https?:\/\//i.test(url)) return;
   try {
     if (process.platform === 'win32') {
-      spawn('cmd', ['/c', 'start', '', url.replace(/&/g, '^&')], { detached: true, stdio: 'ignore' }).unref();
+      // rundll32 opens the default browser without a cmd.exe hop, so cmd
+      // metacharacter escaping is not a concern at all.
+      spawn('rundll32', ['url.dll,FileProtocolHandler', url], { detached: true, stdio: 'ignore' }).unref();
     } else if (process.platform === 'darwin') {
       spawn('open', [url], { detached: true, stdio: 'ignore' }).unref();
     } else {

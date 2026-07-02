@@ -7,7 +7,17 @@
 # Env overrides: GEOLY_INSTALL_BASE (release base URL), GEOLY_VERSION (pin, e.g. v0.1.0)
 $ErrorActionPreference = 'Stop'
 
+# Only https + known hosts may serve the manifest and binaries (a poisoned
+# env var must not redirect the install to an attacker host).
+function Test-AllowedUrl([string]$u) {
+  try { $uri = [uri]$u } catch { return $false }
+  if ($uri.Scheme -ne 'https') { return $false }
+  $h = $uri.Host
+  return ($h -eq 'github.com' -or $h -eq 'objects.githubusercontent.com' -or $h -eq 'raw.githubusercontent.com' -or $h -eq 'geoly.ai' -or $h.EndsWith('.geoly.ai'))
+}
+
 $repoBase = if ($env:GEOLY_INSTALL_BASE) { $env:GEOLY_INSTALL_BASE } else { 'https://github.com/geoly-ai/GEOly-Cli/releases' }
+if (-not (Test-AllowedUrl "$repoBase/x")) { throw "geoly install: GEOLY_INSTALL_BASE must be https on github.com / *.geoly.ai, got: $repoBase" }
 $manifestUrl = if ($env:GEOLY_VERSION) { "$repoBase/download/$($env:GEOLY_VERSION)/manifest.json" } else { "$repoBase/latest/download/manifest.json" }
 
 $arch = switch ($env:PROCESSOR_ARCHITECTURE) {
@@ -25,6 +35,8 @@ if (-not $manifest.latest) { throw 'geoly install: manifest is malformed' }
 $entry = $manifest.files | Where-Object { $_.os -eq 'windows' -and $_.arch -eq $arch } | Select-Object -First 1
 if (-not $entry) { $entry = $manifest.files | Where-Object { $_.os -eq 'windows' -and $_.arch -eq "$arch-baseline" } | Select-Object -First 1 }
 if (-not $entry) { throw "geoly install: no binary published for windows/$arch" }
+
+if (-not (Test-AllowedUrl $entry.url)) { throw "geoly install: refusing binary from untrusted URL: $($entry.url)" }
 
 $tmp = Join-Path ([System.IO.Path]::GetTempPath()) "geoly-install-$PID"
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null

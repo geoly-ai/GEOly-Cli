@@ -54,6 +54,9 @@ export class UpgradeCommand extends GeolyCommand {
     if (!entry) {
       throw new GeolyError('upstream_unavailable', `No binary published for ${osName}/${arch}`);
     }
+    // A poisoned manifest must not be able to point the download anywhere else
+    // (its sha256 would just match the attacker binary) — same allowlist as install.sh.
+    assertTrustedDownloadUrl(entry.url);
 
     status(ctx, `geoly: downloading v${manifest.latest} for ${osName}/${arch}…`);
     const download = await fetch(entry.url, { signal: AbortSignal.timeout(120_000) });
@@ -69,7 +72,7 @@ export class UpgradeCommand extends GeolyCommand {
         hint: `expected ${entry.sha256}, got ${digest}`,
       });
     }
-    if (entry.url.endsWith('.gz')) bytes = zlib.gunzipSync(bytes);
+    if (entry.url.endsWith('.gz')) bytes = zlib.gunzipSync(bytes, { maxOutputLength: 512 * 1024 * 1024 });
 
     // Atomic-ish swap: write next to the target, move the old binary aside
     // (allowed even while running, incl. Windows), rename the new one in.
@@ -94,6 +97,25 @@ export class UpgradeCommand extends GeolyCommand {
     }
     printResult(ctx, { upgraded: true, from: VERSION, to: manifest.latest, path: binPath });
     return 0;
+  }
+}
+
+/** https + known hosts only — mirrors install.sh's allowed_url(). */
+function assertTrustedDownloadUrl(url: string): void {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    throw new GeolyError('upstream_unavailable', `Manifest contains an invalid download URL: ${url}`);
+  }
+  const okHost =
+    u.hostname === 'github.com' ||
+    u.hostname === 'objects.githubusercontent.com' ||
+    u.hostname === 'raw.githubusercontent.com' ||
+    u.hostname === 'geoly.ai' ||
+    u.hostname.endsWith('.geoly.ai');
+  if (u.protocol !== 'https:' || !okHost) {
+    throw new GeolyError('upstream_unavailable', `Refusing download from untrusted URL: ${u.origin}`);
   }
 }
 
