@@ -88,7 +88,7 @@ export async function ensureAccessToken(ctx: Ctx, forceLogin = false): Promise<s
 
   if (!forceLogin && !autoAuthAllowed(ctx)) {
     throw new GeolyError('auth_expired', 'No valid credentials and automatic authorization is disabled', {
-      hint: 'Set GEOLY_TOKEN (read-only, for CI), or run `geoly auth login` interactively once.',
+      hint: 'Run `geoly auth login` once (use --no-browser on headless machines). A pre-existing legacy GEOLY_TOKEN is also accepted.',
     });
   }
 

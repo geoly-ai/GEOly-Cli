@@ -7,9 +7,6 @@
 GEOly remote MCP server: every command maps to the same tools, the same metrics, and the same
 OAuth as the rest of the platform — so numbers never drift between surfaces.
 
-> **Status: pre-release.** The v0 contract is frozen and implementation is in progress.
-> Install endpoints below are the canonical form and go live with the first release.
-
 ## Install
 
 **macOS / Linux**
@@ -45,10 +42,12 @@ geoly call get_brand_overview --time_range 30d
 ```
 
 There is no login step: the first `geoly call` opens your browser for OAuth automatically,
-then continues the command. For CI and headless environments, set a read-only token instead:
+then continues the command. On headless machines, run `geoly auth login --no-browser` — it
+prints the authorization URL to open from any device, and credentials are cached after one
+sign-in. If you still hold a legacy read-only `geom_` token, it is also accepted:
 
 ```sh
-export GEOLY_TOKEN=geom_xxxxxxxx   # never triggers a browser
+export GEOLY_TOKEN=geom_xxxxxxxx   # legacy, read-only — never triggers a browser
 ```
 
 ## Built for agents

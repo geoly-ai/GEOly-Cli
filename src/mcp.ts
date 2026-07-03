@@ -111,8 +111,8 @@ export class McpClient {
           status: 401,
           tool: opts.tool,
           hint: this.ctx.staticToken
-            ? 'GEOLY_TOKEN was rejected — regenerate it in the GEOly dashboard.'
-            : 'Run `geoly auth login`, or set GEOLY_TOKEN for CI.',
+            ? 'GEOLY_TOKEN was rejected — legacy tokens can no longer be created; unset it and run `geoly auth login` instead.'
+            : 'Run `geoly auth login` (use --no-browser on headless machines).',
         });
       }
       if (res.status === 402) {
