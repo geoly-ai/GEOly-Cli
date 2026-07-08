@@ -1,4 +1,4 @@
-# GEOly MCP — public / industry intelligence tools (24)
+# GEOly MCP — public / industry intelligence tools (25)
 
 _Use this when doing cross-brand work (leaderboards, whitespace, momentum, AI-search demand, perception, shopping) or anything involving the locale convention._
 
@@ -72,14 +72,15 @@ category / topic IDs and slugs. Then use the typed tool. `list_public_topics`,
 
 ---
 
-## 2. Topic tools (9)
+## 2. Topic tools (10)
 
 | Tool | Purpose | Key params |
 |---|---|---|
 | `get_public_topic_overview` | Overview of one public topic | `topic_id \| slug, country, language` |
 | `get_public_topic_brand_leaderboard` | Brand leaderboard ranked by Share of Mention (absolute 1-based rank) | `topic_id, platform (legacy alias: platform_id), date_from, date_to, page, page_size (1–100)` |
 | `get_public_topic_som_trend` | Daily SoM trend (tracks #1 leader by default, or a specific `brand_known_id`) | `topic_id, brand_known_id, date_from, date_to, max_points (2–90)` |
-| `get_public_topic_prompt_matrix` | Prompt × brand heatmap (per-prompt SoM %) | `topic_id, top_brands (1–20), max_prompts (1–200)` |
+| `get_public_topic_prompt_matrix` | Prompt × brand heatmap (per-prompt SoM %). **Rows are limited to prompts covering the top-N brands** — a prompt whose only mentions fall outside those columns is omitted, so this can return fewer rows than the topic has prompts. Raise `top_brands` or use `list_public_topic_prompts` for the full list | `topic_id, top_brands (1–20), max_prompts (1–200)` |
+| `list_public_topic_prompts` | **Enumerate EVERY prompt** under a topic (not brand-filtered, unlike the matrix), sorted by total mentions. Each item: text + intent + total mentions + leader brand & share. Use to get the complete prompt list or a `prompt_id` for `get_public_topic_prompt_detail` | `topic_id, platform` |
 | `get_public_topic_prompt_detail` | One prompt: metadata, per-brand breakdown, recent records w/ snippets, top citation domains | `prompt_id, record_limit (1–50), citation_limit (1–50)` |
 | `get_public_topic_record_detail` | One public record (AI answer): metadata, snippeted answer (~8k), capped citations/sources/shopping, brands mentioned | `record_id` |
 | `get_public_topic_citation_domains` | Citation-domain leaderboard for the topic (most-cited domains + rates) | `topic_id, limit (1–200)` |

@@ -2,6 +2,20 @@
 
 All notable changes to the `geoly-mcp` agent skill.
 
+## 0.2.1
+
+- **New `list_public_topic_prompts` tool — enumerate EVERY prompt under a topic.**
+  Fixes a real reconciliation gap: `get_public_topic_prompt_matrix` only emits prompt rows
+  that cover the top-N brands, so a prompt whose only mentions fall outside those columns
+  (e.g. led by a niche brand ranked #15) was silently absent — the matrix could return 8
+  rows for a 9-prompt topic. The new tool lists all active prompts (not brand-filtered),
+  sorted by total mentions, each with intent + total mentions + leader brand & share. Use it
+  for the complete prompt list, to reconcile a topic prompt count, or to get a `prompt_id`
+  for `get_public_topic_prompt_detail`.
+- **Clearer `get_public_topic_prompt_matrix` description.** It now states up front that rows
+  are limited to prompts covering the top-N brands and points to `list_public_topic_prompts`
+  for full enumeration, so agents stop mistaking the matrix for a prompt enumerator.
+
 ## 0.2.0
 
 - **GEOly CLI section (agent bootstrap).** The tool surface now has a terminal projection
