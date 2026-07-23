@@ -2,6 +2,32 @@
 
 All notable changes to the `geoly-mcp` agent skill.
 
+## 0.3.0
+
+- **Tool surface 63 → 66: three new tools.** `list_public_shopping_boards` (the cross-category
+  AI shelf leaderboard — hot/climbers/entrants with batch-vs-batch rank moves),
+  `get_public_shopping_product_detail` (one product's full AI analysis: shelves, weekly trend,
+  rivals, channels), and `get_public_source_brand_conduit` (the topics where a source domain
+  funnels AI attention toward a brand; available to every token, no plan gate).
+- **New facets & params.** `get_public_search_queries` gains `mode=territories` (demand-root
+  ownership map; counts only `web_search_query` rewrites). `get_public_source_domain_detail`
+  gains `include_scorecard` (full AI DA breakdown: authority/placement/breadth sub-scores,
+  rank + pool, momentum, confidence, integrity) — `totalAppearances`/`usableRate` are now
+  deprecated and always null, and `coOccurringBrands` documents its ≥10-per-topic threshold.
+  `search_public_entities` gains `include_products` (+ `country`/`language` for
+  `productSpaceId` resolution) and now also returns citation source domains.
+- **Multi-org gating flipped.** Public tools are now enabled on multi-org connections when ANY
+  accessible org is Grow-tier+ (they were single-org-only in v1); writes on multi-org stay
+  clamped read-only. Consent is a per-resource read/write grid (default all-read, no-write).
+- **Caliber corrections (2026-07-23) — old pulls will not match; new metric-calibers §7.**
+  `get_brand_citations_daily.citationCount` fixed from always-0 to real values;
+  `get_competitor_overview.brand.mentionRate` fixed from a density (could exceed 100) to a true
+  rate; `get_prompt_list` no longer carries the placeholder `geoMetrics.som`; public AI-search
+  query tools exclude echo rewrites everywhere.
+- **Leaner big payloads.** `get_public_brand view=competitors` returns W/L/T totals without
+  per-topic battle cells over MCP; over-cap public/report responses now degrade to a parseable
+  JSON envelope (`_truncated`/`preview`) instead of a hard-sliced invalid JSON string.
+
 ## 0.2.1
 
 - **New `list_public_topic_prompts` tool — enumerate EVERY prompt under a topic.**

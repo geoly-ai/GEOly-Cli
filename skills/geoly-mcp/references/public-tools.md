@@ -1,4 +1,4 @@
-# GEOly MCP — public / industry intelligence tools (25)
+# GEOly MCP — public / industry intelligence tools (27)
 
 _Use this when doing cross-brand work (leaderboards, whitespace, momentum, AI-search demand, perception, shopping) or anything involving the locale convention._
 
@@ -9,9 +9,9 @@ whitespace, momentum, AI-search demand, perception, shopping.
 ## Access & gating
 
 - **Plan**: Grow tier and above — plan IDs `grow | advanced | plus | enterprise` (the gate
-  `canAccessMcp`; "Grow" is $149/mo, the old "Growth+" label). **Context**: single-org only
-  (multi-org tokens cannot use public tools in v1). If a public tool is missing, the token's
-  org lacks the tier or an active entitlement.
+  `canAccessMcp`; "Grow" is $149/mo, the old "Growth+" label). **Multi-org connections get
+  public tools too**, as long as any accessible org qualifies (writes stay clamped read-only).
+  If a public tool is missing, no accessible org has the tier or an active entitlement.
 - Public tools read the **`public_*` canonical model** — a *separate collection pipeline*
   from the brand's own monitoring. The same brand's numbers can differ between the self
   surface and the public surface; never reconcile one against the other.
@@ -65,7 +65,7 @@ category / topic IDs and slugs. Then use the typed tool. `list_public_topics`,
 
 | Tool | Purpose | Key params |
 |---|---|---|
-| `search_public_entities` | Free-text resolver: brand / category / topic name or domain → public IDs + slugs | `query (2–120 chars), limit (1–20, default 6)` |
+| `search_public_entities` | Free-text resolver: brand / category / topic / product name or domain → public IDs + slugs. Returns categories, topics, brands **and citation source domains**; set `include_products=true` to also search shopping products (needs ≥3 query chars — shorter returns an empty group + `productsNote`; each hit carries `productId` → `get_public_shopping_product_detail`, `stale`/`latestSeen` freshness flags, and `productSpaceId` when you also pass `country`+`language`) | `query (2–120 chars), limit (1–20, default 6), include_products (bool), country, language` |
 | `list_public_topics` | Browse/paginate public topics, optional status/search filter | `page, page_size (1–100), country, language, status: draft\|active\|rejected\|archived, search, platform` |
 | `list_public_locales` | List valid `{country, language}` pairs for an entity | `entity_kind: content\|brand\|topic_slug\|product_space, entity_id` |
 | `get_available_platforms` | **Discovery**: which AI platforms have data for a scope (call before passing `platform`) — ordered by volume, `[0]` = default | `scope: brand\|topic\|category\|global (default global), brand_id, topic_id, product_space_id, country, language` |
@@ -102,6 +102,9 @@ category / topic IDs and slugs. Then use the typed tool. `list_public_topics`,
 `visibility` · `footprint` · `competitors` · `citations` · `category_ranking` · `revenue` ·
 `shopping`. (`compare_public_brands` defaults to `visibility`.)
 
+> `view=competitors` returns head-to-head **wins/losses/ties totals** + `sharedTopicCount` per
+> peer — the per-topic battle-cell detail shown in the app is omitted over MCP (payload size).
+
 ---
 
 ## 4. Category / product-space (3)
@@ -115,6 +118,9 @@ category / topic IDs and slugs. Then use the typed tool. `list_public_topics`,
 `get_public_category` `view` facets: `overview` · `brand_leaderboard` · `som_trend` ·
 `topics` · `citation_domains` · `recent_mentions`.
 
+> `view=citation_domains` returns top domains plus `totalCitations` / `totalDomains` that are
+> **category-wide totals** (not just the returned rows) — safe as a share denominator.
+
 ---
 
 ## 5. AI-search query intelligence (2)
@@ -125,16 +131,28 @@ category / topic IDs and slugs. Then use the typed tool. `list_public_topics`,
 | `get_public_search_query_detail` | Drill-down on one query (brands + prompts + top sources) or one theme | `detail_mode: query\|theme, query (query mode), product_space_id (query mode), topic_id (theme mode), country (default US), language (default en)` |
 
 `get_public_search_queries` `mode` facets: `queries` (default) · `themes` ·
-`brand_landscape` · `prompt_map` · `product_spaces`.
+`brand_landscape` · `prompt_map` · `territories` · `product_spaces`.
+
+> `mode=territories` — the demand-territory map: which brand OWNS each cross-topic demand root
+> (category leader's territory + challenger territories; each root has `span` = topics covered
+> and `share` = the leader's record share; `truncated=true` means the category was too large to
+> compute exactly and results were withheld). Territories only counts `web_search_query`
+> rewrites — its record counts are **not comparable** with the `queries` facet.
+>
+> **Echo exclusion (all modes)**: rewrites that are just the user prompt bounced back verbatim
+> are excluded from every facet. Query counts pulled before 2026-07-23 ran higher — old numbers
+> will not reconcile with fresh pulls; the fresh ones are correct.
 
 ---
 
-## 6. Shopping (2)
+## 6. Shopping (4)
 
 | Tool | Purpose | Key params |
 |---|---|---|
-| `list_public_shopping_products` | Shopping overview for a product-space slice: counts, paginated grid, top channels, price bands | `product_space_id, country (default US), language (default en), days (1–180, default 30), search, page, page_size (1–100)` |
-| `get_public_shopping_card_detail` | Full detail for one product card: header, evidence, up to 20 topics/prompts/retail offers | `card_key, product_space_id, country, language, days (1–180, default 30)` |
+| `list_public_shopping_boards` | **Cross-category AI shelf leaderboard** (the /shopping page): which products AI recommends most across ALL categories, latest collection batch. Three boards: `hot` (most answer appearances), `climbers` (biggest rank gains vs previous batch), `entrants` (new to the board). Items carry `rank`/`rankPrev`, `appearances`/`appearancesPrev` (batch-counted), `productId`, `productSpaceId`. `comparable=false` → no previous batch (climbers/entrants empty); `batchSuspect=true` → batch looks under-collected, treat ranks with caution. **Batch semantics ≠ the rolling-window grid below — counts will not match between the two** | `board: hot\|climbers\|entrants\|all (default all), limit (1–50, default 10), country, language, platform` |
+| `get_public_shopping_product_detail` | **One product's FULL analysis** (the /product page): identity + KPI counts (topicCount, recordsAppeared, shelfScore 0–1), per-topic shelves, weekly position-band trend, rivals (co-occurring competitors head-to-head), top-5-shelves × top-8-products competition grid, attributes/purchase observations, channel classification (official/marketplace/aggregator). Superset of the card preview below. Response is large — narrow with `days` if truncated | `product_id (ptsp_*), country, language, days (1–180, default 30), to (YYYY-MM-DD — pin a historical window), platform` |
+| `list_public_shopping_products` | Shopping overview for a product-space slice (**rolling-window** grid): counts, paginated grid, top channels, price bands | `product_space_id, country (default US), language (default en), days (1–180, default 30), search, page, page_size (1–100)` |
+| `get_public_shopping_card_detail` | Entity-level product **preview**: header, brand, evidence, top topics and retail offers | `product_id, product_space_id, country, language, days (1–180, default 30)` |
 
 ---
 
@@ -164,6 +182,18 @@ category / topic IDs and slugs. Then use the typed tool. `list_public_topics`,
   `get_topic_competition_difficulty` (0–100; higher = more concentrated/harder) +
   `get_public_topic_brand_leaderboard` to see who holds it.
 
+- **"What's trending on the AI shopping shelf?"**
+  `list_public_shopping_boards` (hot / climbers / entrants) → drill any `productId` with
+  `get_public_shopping_product_detail` (shelves, weekly trend, rivals, channels).
+
+- **"Which demand roots does each brand own in our category?"**
+  `get_public_search_queries` mode=`territories` — leader vs challenger territories; drill a
+  root's queries via `get_public_search_query_detail`.
+
+- **"In which contexts does a source domain push AI toward a competitor?"**
+  `get_public_sources_overview` / `get_public_source_domain_detail` (co-occurring brands, no
+  plan gate) → `get_public_source_brand_conduit` (domain × brand → the exact topics).
+
 ## Caveats specific to public tools
 
 - **Separate pipeline**: do not reconcile public numbers against the self-surface
@@ -173,6 +203,7 @@ category / topic IDs and slugs. Then use the typed tool. `list_public_topics`,
   `platform` explicitly. When a scope has multiple platforms, say which platform a figure is
   for; don't imply it's all of AI.
 - **Locale defaulting**: always check `defaulted`; surface it.
-- **Truncation**: public responses cap at ~120k chars (`[truncated: …narrow your query]`).
-  Narrow by topic/locale/date or paginate.
+- **Truncation**: public responses cap at ~120k chars; an over-cap response comes back as a
+  JSON envelope `{ "_truncated": true, "_message": …, "preview": … }` (the preview is the
+  beginning of the original JSON, NOT complete). Narrow by topic/locale/date or paginate.
 - **Ranks are absolute** (1-based leaderboard position), not relative to the returned page.

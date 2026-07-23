@@ -1,4 +1,4 @@
-# GEOly MCP — full tool catalog (up to 63 tools)
+# GEOly MCP — full tool catalog (up to 66 tools)
 
 _Use this when you need a tool's exact parameters/enums/defaults, or to confirm whether a tool is exposed over MCP._
 
@@ -8,8 +8,11 @@ Ground-truth catalog of the tools the GEOly MCP server **registers**. This is th
 
 - **Discovery selectors** (`list_organizations`, `list_brands`) appear only in multi-brand /
   multi-org mode.
-- **Write tools** require `?tool_profile=standard` (or `admin`); read-only by default.
-- **Public tools** require a Grow-tier-or-above plan in single-org context.
+- **Write tools** require write access granted on the OAuth consent screen (per-resource
+  read/write grid; legacy `?tool_profile=standard` still honored); read-only by default, and
+  multi-org connections are **always** read-only (write grants clamped).
+- **Public tools** require a Grow-tier-or-above plan; multi-org connections get them when
+  **any** accessible org qualifies.
 - Brand-scoped tools auto-resolve the brand when the org has one brand or the token is
   brand-bound; otherwise pass `brand_id` (discover it via `list_brands`).
 
@@ -33,7 +36,7 @@ Parameter notation: `name: type (constraints, default)`. `time_range` is the sha
 | Tool | Purpose | Params |
 |---|---|---|
 | `get_brand_overview` | **KPI headline**: AIGVR score + mention/citation rates + per-platform stats | `time_range` |
-| `get_brand_citations_daily` | Daily trend of aigvr / mentionRate / citationRate with `completedRecords` denominator | `start_date, end_date (YYYY-MM-DD)`, `platform` |
+| `get_brand_citations_daily` | Daily trend of aigvr / mentionRate / citationRate with `completedRecords` denominator. `citationCount` = raw citation URLs collected that day — a **different numerator** from `citationRate` (% of prompts citing a brand-owned domain); never divide one by the other | `start_date, end_date (YYYY-MM-DD)`, `platform` |
 | `query_analytics` | Controlled aggregation (no SQL) over daily datasets | see **§ query_analytics** below |
 | `resolve_my_brand_public` | Bridge: resolve this monitored brand → its `public_brand` (ranked candidates + `availableLocales`) | — |
 
@@ -54,7 +57,7 @@ Parameter notation: `name: type (constraints, default)`. `time_range` is the sha
 
 | Tool | Purpose | Params |
 |---|---|---|
-| `get_prompt_list` | Search/list prompts with visibility stats; per-prompt rate in `geoMetrics.aigvr.citationRate` | `page, page_size (1–100), search, sort_by: text\|visibility\|position\|citations\|date, sort_order: asc\|desc, time_range, start_date, end_date, platform, tags[], topic[], topic_name` |
+| `get_prompt_list` | Search/list prompts with visibility stats; per-prompt rate in `geoMetrics.aigvr.citationRate`. Rows do **not** carry `geoMetrics.som` (SoM/competitor breakdown is only computed by `get_prompt_detail`) | `page, page_size (1–100), search, sort_by: text\|visibility\|position\|citations\|date, sort_order: asc\|desc, time_range, start_date, end_date, platform, tags[], topic[], topic_name` |
 | `get_prompt_detail` | One prompt's full detail: per-platform performance, AIGVR, SoM, competitor mentions | `prompt_id` |
 | `get_prompt_record_summaries` | Latest monitoring record per platform for one prompt | `prompt_id` |
 | `get_prompt_record_detail` | Full detail of one monitoring record (answer, citations, sentiment) | `record_id, include_answer_text (bool, default false)` |
@@ -84,7 +87,7 @@ Parameter notation: `name: type (constraints, default)`. `time_range` is the sha
 | Tool | Purpose | Params |
 |---|---|---|
 | `get_competitor_list` | Tracked competitors for the brand | — |
-| `get_competitor_overview` | Cross-prompt competitor comparison (**record-weighted** — not headline caliber) | `time_range, platform` |
+| `get_competitor_overview` | Cross-prompt competitor comparison (**record-weighted** — not headline caliber). `brand.mentionRate` = true mention rate (% of records with mentions>0; before 2026-07-23 it was a mention *density* that could exceed 100 — old pulls will not match) | `time_range, platform` |
 | `get_competitor_cooccurrence` | Brand + competitor co-occurrence: per-record detail + summary; optional answer text | `time_range, platform, limit (1–100), include_answer (bool), answer_max_chars` |
 | `get_platform_matrix` | Comparison matrix: brand+competitors × platform, or topics × platform | `dimension: topic\|competitor (default competitor), time_range, platform` |
 | `get_topic_analytics` | Per-topic analysis: sentiment, competitors, response types, trends. Also the way to enumerate topics over MCP | `time_range: 7d\|30d\|90d\|180d\|all\|custom (default 30d; custom requires start_date), start_date, end_date, platform, topic_ids[], include_ungrouped (bool)` |
@@ -126,21 +129,23 @@ Parameter notation: `name: type (constraints, default)`. `time_range` is the sha
 
 ## I. Public source domains (read-only, available to all tokens)
 
-These read cross-topic public citation-source data and need no brand context.
+These read cross-topic public citation-source data and need no brand context (NOT Grow-gated).
 
 | Tool | Purpose | Params |
 |---|---|---|
-| `get_public_sources_overview` | Most-cited public source domains across all topics (cross-topic leaderboard) | `limit (1–200), type` |
-| `get_public_source_domain_detail` | Profile one citation source domain: usable citations, per-topic coverage, co-occurring brands | `domain` |
+| `get_public_sources_overview` | Most-cited public source domains across all topics (cross-topic leaderboard). Each row's `score` = **AI DA** (0–100 AI Domain Authority: citation share + placement + breadth) | `limit (1–200), type` |
+| `get_public_source_domain_detail` | Profile one citation source domain: usable citations, per-topic coverage (≤50), co-occurring brands (≤10), top URLs (≤100), `aiDa`. Calibers: headline counts come from the last sealed batch (may trail live lists ~1 day); `coOccurringBrands` only counts pairs with **≥10 co-occurring answers within one topic** (absent ≠ zero); `totalAppearances`/`usableRate` are deprecated, always null | `domain, include_scorecard (bool — adds the full AI DA scorecard: authority/placement/breadth sub-scores, rank + pool size, momentum, confidence, integrity)` |
+| `get_public_source_brand_conduit` | The topics where one source domain's citations co-occur with one brand (top 30) — the contexts in which this source funnels AI toward that brand. Same ≥10-per-topic threshold: empty = nothing **above** the threshold, not strictly zero | `domain, public_brand_id, platform` |
 
 ---
 
-## J. Public / industry tools (25) — Grow tier and above, single-org only
+## J. Public / industry tools (27) — Grow tier and above
 
-The cross-brand competitive-intelligence surface. Full playbook + locale/platform conventions
+The cross-brand competitive-intelligence surface (multi-org: enabled when any accessible org
+qualifies). Full playbook + locale/platform conventions
 in [public-tools.md](./public-tools.md). Most data tools accept an optional `platform` (default
 `chatgpt`) — discover valid platforms per scope with `get_available_platforms`. Quick index
-(all 25):
+(all 27):
 
 **Resolve & browse**: `search_public_entities`, `list_public_topics`, `list_public_locales`,
 `get_available_platforms`
@@ -153,27 +158,31 @@ in [public-tools.md](./public-tools.md). Most data tools accept an optional `pla
 `get_public_brand_perception_aspect_mentions`, `compare_public_brands`
 **Category / product-space**: `get_public_category`, `get_category_whitespace`,
 `get_category_brand_momentum`
-**AI-search intelligence**: `get_public_search_queries`, `get_public_search_query_detail`
-**Shopping**: `list_public_shopping_products`, `get_public_shopping_card_detail`
+**AI-search intelligence**: `get_public_search_queries` (incl. mode=`territories` — demand-root
+ownership map), `get_public_search_query_detail`
+**Shopping**: `list_public_shopping_boards` (cross-category AI shelf: hot/climbers/entrants,
+batch-vs-batch), `get_public_shopping_product_detail` (one product's full analysis),
+`list_public_shopping_products`, `get_public_shopping_card_detail`
 
 ---
 
 ## Count by registration source (max surface)
 
-Counts are the largest configuration (multi-org token + `tool_profile=standard` + Grow-tier+).
-A single brand-bound, read-only, lower-tier token sees far fewer.
+Counts are the largest configuration (single-org token + write grants + Grow-tier+; multi-org
+adds the 2 selectors but clamps the 4 write tools). A brand-bound, read-only, lower-tier token
+sees far fewer.
 
 | Source | Count |
 |---|---|
-| Read-only (brand + GA4 + public-source + `get_current_date`) | 30 |
+| Read-only (brand + GA4 + public-source + `get_current_date`) | 31 |
 | Discovery selectors (`list_brands`, `list_organizations`) — multi-brand/org only | 2 |
-| Write (`tool_profile=standard+`) | 4 |
+| Write (consent write grants) | 4 |
 | Report (user-scoped) | 2 |
-| Public / industry (Grow+) | 25 |
-| **Max total** | **63** |
+| Public / industry (Grow+) | 27 |
+| **Max total** | **66** |
 
-> The read-only 30 includes `get_discovered_links`, which is **inert over MCP** (its source
-> tool `fetch_page` is in-app only) — so 29 are functionally useful. Display sections A–J above
+> The read-only 31 includes `get_discovered_links`, which is **inert over MCP** (its source
+> tool `fetch_page` is in-app only) — so 30 are functionally useful. Display sections A–J above
 > regroup these for navigation; `get_current_date` lives under both "discovery" (display) and
 > the read-only count (source).
 

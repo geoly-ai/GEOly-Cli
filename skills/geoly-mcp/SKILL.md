@@ -3,14 +3,14 @@ name: geoly-mcp
 description: "Use when querying or reporting on AI brand visibility through the GEOly MCP server — picking the right tool, following the org/brand discovery flow, quoting the correct KPI caliber, and avoiding metric-definition pitfalls. Triggers: GEOly; GEO / AI-visibility reporting; citation rate, mention rate, AIGVR, Share of Model; daily trends; competitor, category whitespace, brand momentum; any call to get_brand_overview / query_analytics / get_prompt_* / get_citation_* / compare_public_brands / get_category_* / get_public_* tools."
 metadata:
   author: geoly
-  version: "0.2.1"
+  version: "0.3.0"
 ---
 
 # GEOly MCP
 
 [GEOly](https://www.geoly.ai) tracks how brands are mentioned and cited across AI engines (ChatGPT, Gemini,
-Perplexity, Grok, Google AI). The MCP server exposes **up to 63 tools** (the exact set depends
-on plan, mode, and write profile) across two surfaces:
+Perplexity, Grok, Google AI). The MCP server exposes **up to 66 tools** (the exact set depends
+on plan, mode, and write grants) across two surfaces:
 
 - **Self / brand-own** — the customer's own monitoring, audits, GA4, and write actions.
 - **Public / industry** — cross-brand competitive intelligence (Grow tier and above).
@@ -113,12 +113,17 @@ public/report tools) and paginate (`currentPage == totalPages`) instead of assum
 - **Subscription gate**: single-org / single-brand context returns **HTTP 402** at entry if the
   subscription is inactive. Multi-org validates **per target org at call time** and fails that
   org's tool call with an error message (not a 402).
-- **Public tools** require a **Grow-tier-or-above** plan (`grow | advanced | plus | enterprise`)
-  in **single-org** context. If `get_public_*` / `compare_public_brands` / `get_category_*`
-  aren't available, the org lacks the tier or an active entitlement.
-- **Writes** (`create_prompt`, `create_topic`, `create_competitor`, `trigger_prompt`) require the
-  **standard** (write) profile, chosen on the OAuth consent screen; the default is read-only, and
-  the legacy `geom_` static token is always read-only. `trigger_prompt` **consumes credits**.
+- **Public tools** require a **Grow-tier-or-above** plan (`grow | advanced | plus | enterprise`).
+  Multi-org connections get them too, as long as **any** accessible org qualifies. If
+  `get_public_*` / `compare_public_brands` / `get_category_*` aren't available, no accessible
+  org has the tier or an active entitlement. (The three public **source** tools —
+  `get_public_sources_overview` / `get_public_source_domain_detail` /
+  `get_public_source_brand_conduit` — are NOT plan-gated: every token has them.)
+- **Writes** (`create_prompt`, `create_topic`, `create_competitor`, `trigger_prompt`) require
+  **write access granted on the OAuth consent screen** (a per-resource read/write grid; the
+  default is all-read, no-write). The legacy `geom_` static token is always read-only, and
+  **multi-org connections are always read-only** (write grants are clamped). `trigger_prompt`
+  **consumes credits**.
 - **Dates**: call `get_current_date` before building date ranges; `query_analytics` ranges ≤ 366 days.
 
 ## GEOly CLI — bulk & scripted access (optional; prefer for loops/exports)
@@ -177,6 +182,16 @@ questions in a chat session, keep using the MCP tools.
 
 > `display_data` / `display_chart` and `web_search` / `fetch_page` are **in-app agent only** —
 > not exposed over MCP. MCP results are plain JSON (no `_ref`).
+>
+> `get_prompt_list` rows do **not** carry `geoMetrics.som` — per-prompt SoM/competitor breakdown
+> is only computed by `get_prompt_detail` (list omits it for performance).
+
+### Public source domains (every token — no plan gate)
+| You want… | Use |
+|---|---|
+| Most-cited source domains across all AI answers, each with its **AI DA** (0–100 domain authority) | `get_public_sources_overview` |
+| One source domain's profile; add `include_scorecard=true` for the AI DA breakdown (authority/placement/breadth + rank/momentum/integrity) | `get_public_source_domain_detail` |
+| **Which topics a source funnels AI toward a brand** ("where does reddit.com steer AI to competitor X?") | `get_public_source_brand_conduit` |
 
 ### Public / industry (Grow tier and above)
 | You want… | Use |
@@ -186,6 +201,9 @@ questions in a chat session, keep using the MCP tools.
 | Where to invest (winnable topics) | `get_category_whitespace` |
 | Who's gaining/losing share | `get_category_brand_momentum` |
 | What AI is being asked in our space | `get_public_search_queries` → `get_public_search_query_detail` |
+| Which brand OWNS each cross-topic demand root | `get_public_search_queries` mode=`territories` |
+| Cross-category **AI shelf leaderboard** (hot / climbers / entrants, week-over-week) | `list_public_shopping_boards` |
+| One product's full AI analysis (shelves, trend, rivals, channels) | `get_public_shopping_product_detail` |
 | Compare 2–4 brands head-to-head | `compare_public_brands` (country+language **required**) |
 | How AI perceives a brand | `get_public_brand_perception` → `…_aspect_mentions` |
 | Is a topic worth targeting | `get_topic_competition_difficulty` |

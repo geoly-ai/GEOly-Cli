@@ -65,9 +65,10 @@ prompt-level breakdowns instead of re-deriving from raw citations.
    a citation-event path, not `get_brand_citations_daily`.
 4. **Respect truncation.** Large responses are capped, and the marker differs by surface:
    **brand tools** return structured `_truncated` / `_shownCount` / `_totalCount` fields (~60k
-   cap); **public & report tools** instead append a plain-text
-   `… [truncated: response exceeded 120000 chars — narrow your query]` (~120k cap, no structured
-   fields). Either way, paginate or narrow — do not assume you got everything.
+   cap); **public & report tools** (~120k cap) return a JSON envelope
+   `{ "_truncated": true, "_originalChars": …, "_message": …, "preview": "<beginning of the
+   original JSON — NOT complete>" }`. Either way, paginate or narrow — do not assume you got
+   everything.
 
 ---
 
@@ -107,3 +108,27 @@ If two numbers disagree, it's almost always a caliber mismatch. Check, in order:
    different things.
 4. Do the **date windows / platforms** match? → align `time_range` / `start_date`+`end_date`
    and `platform` before comparing.
+5. Is one number from a pull **before 2026-07-23**? → see §7; several calibers were corrected
+   that day and old pulls will not reconcile with fresh ones.
+
+---
+
+## 7. Caliber corrections shipped 2026-07-23 (old pulls will NOT match)
+
+Four numbers changed **on purpose** — the new values are the correct ones. If an old report
+disagrees with a fresh pull, the fresh pull wins:
+
+1. **`get_brand_citations_daily.citationCount`** was **always 0** (a dead upstream table); it
+   now returns the real count of citation URLs collected that day. It is a **different
+   numerator** from `citationRate` (% of prompts whose answers cite a brand-owned domain) —
+   never divide one by the other, and never treat pre-fix zeros as "no citations".
+2. **`get_competitor_overview.brand.mentionRate`** is now a true mention rate (% of records
+   with mentions>0). It was previously a mention **density** (total mentions ÷ records × 100)
+   that could exceed 100. Expect a downward step vs old pulls (e.g. 154 → 59) — not a decline
+   in performance, a definition fix.
+3. **`get_prompt_list` no longer returns `geoMetrics.som`.** The list-level value was a
+   constant placeholder (share=100, 0 competitors) that never reflected competition. Per-prompt
+   SoM/competitor breakdown lives only on `get_prompt_detail`.
+4. **Public AI-search query tools exclude echo rewrites** (the user prompt bounced back
+   verbatim by the platform). All `get_public_search_queries` facets and drill-downs count
+   fewer — but honest — queries than pre-fix pulls.
