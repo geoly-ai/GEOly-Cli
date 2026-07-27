@@ -3,7 +3,7 @@
 **The [GEOly](https://www.geoly.ai) command-line interface — built for agents.**
 
 [GEOly](https://www.geoly.ai) tracks how brands are mentioned and cited across AI engines
-(ChatGPT, Gemini, Perplexity, Grok, Google AI). This CLI is a thin terminal projection of the
+(ChatGPT, Perplexity, Google AI Mode, Google AI Overview, Gemini, Copilot). This CLI is a thin terminal projection of the
 GEOly remote MCP server: every command maps to the same tools, the same metrics, and the same
 OAuth as the rest of the platform — so numbers never drift between surfaces.
 

@@ -8,8 +8,8 @@ metadata:
 
 # GEOly MCP
 
-[GEOly](https://www.geoly.ai) tracks how brands are mentioned and cited across AI engines (ChatGPT, Gemini,
-Perplexity, Grok, Google AI). The MCP server exposes **up to 67 tools** (the exact set depends
+[GEOly](https://www.geoly.ai) tracks how brands are mentioned and cited across AI engines (ChatGPT,
+Perplexity, Google AI Mode, Google AI Overview, Gemini, Copilot). The MCP server exposes **up to 67 tools** (the exact set depends
 on plan, mode, and write grants) across two surfaces:
 
 - **Self / brand-own** — the customer's own monitoring, audits, GA4, and write actions.

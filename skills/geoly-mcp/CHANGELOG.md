@@ -4,6 +4,12 @@ All notable changes to the `geoly-mcp` agent skill.
 
 ## 0.3.1
 
+- **Platform lineup refresh: Grok retired.** The engine roster is now ChatGPT, Perplexity,
+  Google AI Mode (`google_ai`), Google AI Overview (`google_ai_overview`), Gemini — with
+  Copilot onboarding next. All platform-filter enums across the brand tools now read
+  `chatgpt, gemini, perplexity, google_ai, google_ai_overview` (passing `grok` returns
+  nothing — it stopped collecting). As always, discover per-scope platforms with
+  `get_available_platforms` instead of assuming.
 - **Tool surface 66 → 67: `list_prompt_records`.** Full execution history of one prompt over a
   time range, paginated (unlike `get_prompt_record_summaries`, which returns only the latest
   record per platform). Rows carry `shoppingVisible` for shopping-card trend work; feed a row
