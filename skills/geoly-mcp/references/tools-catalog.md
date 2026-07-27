@@ -1,4 +1,4 @@
-# GEOly MCP — full tool catalog (up to 66 tools)
+# GEOly MCP — full tool catalog (up to 67 tools)
 
 _Use this when you need a tool's exact parameters/enums/defaults, or to confirm whether a tool is exposed over MCP._
 
@@ -59,8 +59,9 @@ Parameter notation: `name: type (constraints, default)`. `time_range` is the sha
 |---|---|---|
 | `get_prompt_list` | Search/list prompts with visibility stats; per-prompt rate in `geoMetrics.aigvr.citationRate`. Rows do **not** carry `geoMetrics.som` (SoM/competitor breakdown is only computed by `get_prompt_detail`) | `page, page_size (1–100), search, sort_by: text\|visibility\|position\|citations\|date, sort_order: asc\|desc, time_range, start_date, end_date, platform, tags[], topic[], topic_name` |
 | `get_prompt_detail` | One prompt's full detail: per-platform performance, AIGVR, SoM, competitor mentions | `prompt_id` |
-| `get_prompt_record_summaries` | Latest monitoring record per platform for one prompt | `prompt_id` |
-| `get_prompt_record_detail` | Full detail of one monitoring record (answer, citations, sentiment) | `record_id, include_answer_text (bool, default false)` |
+| `get_prompt_record_summaries` | **Latest** monitoring record per platform for one prompt (one row per platform, no history) | `prompt_id` |
+| `list_prompt_records` | **Full execution history** of one prompt over a time range, paginated — every daily record, not just the latest. Each row: `id, platformCode/Name, recordDate, status, position, mentionRank, mentions, sentiment, sentimentScore, shoppingVisible`. Feed a returned `id` to `get_prompt_record_detail`. Use for per-day trend analysis (e.g. 30-day shopping-card presence): list here, then pull detail only for the records you need (skip `shoppingVisible=false` for shopping-card work) | `prompt_id, platform, time_range (7d\|30d\|90d, default 30d), start_date, end_date (explicit dates = UTC+8 business days, must be paired; they override time_range), limit (1–200, default 100), offset, sort_order: asc\|desc` |
+| `get_prompt_record_detail` | Full detail of one monitoring record (answer, citations, sentiment, shopping cards) | `record_id, include_answer_text (bool, default false)` |
 | `get_prompt_citations` | Citation list for a prompt — raw or deduplicated URL list with `share%` | `prompt_id, deduplicate (bool), limit (1–500), offset, time_range, start_date, end_date, sort_order: asc\|desc, platform, domain` |
 | `get_prompt_mention_rates` | Per-prompt mention rate, **ascending** — blind-spot discovery ("which queries never mention us") | `time_range, min_records (1–100), limit (1–100), only_active (bool)` |
 
@@ -87,10 +88,10 @@ Parameter notation: `name: type (constraints, default)`. `time_range` is the sha
 | Tool | Purpose | Params |
 |---|---|---|
 | `get_competitor_list` | Tracked competitors for the brand | — |
-| `get_competitor_overview` | Cross-prompt competitor comparison (**record-weighted** — not headline caliber). `brand.mentionRate` = true mention rate (% of records with mentions>0; before 2026-07-23 it was a mention *density* that could exceed 100 — old pulls will not match) | `time_range, platform` |
+| `get_competitor_overview` | Cross-prompt comparison vs **automatically discovered** competitors (**record-weighted** — not headline caliber). `somShare` = **records-based Share of Mentions** (each brand counts at most once per AI answer ÷ all brand-mentioned records; was visibility-weighted before 2026-07-24); adds `mentionedRecords`. `brand.mentionRate` = true mention rate (% of records with mentions>0; before 2026-07-23 it was a mention *density* that could exceed 100 — old pulls will not match) | `time_range, platform` |
 | `get_competitor_cooccurrence` | Brand + competitor co-occurrence: per-record detail + summary; optional answer text | `time_range, platform, limit (1–100), include_answer (bool), answer_max_chars` |
-| `get_platform_matrix` | Comparison matrix: brand+competitors × platform, or topics × platform | `dimension: topic\|competitor (default competitor), time_range, platform` |
-| `get_topic_analytics` | Per-topic analysis: sentiment, competitors, response types, trends. Also the way to enumerate topics over MCP | `time_range: 7d\|30d\|90d\|180d\|all\|custom (default 30d; custom requires start_date), start_date, end_date, platform, topic_ids[], include_ungrouped (bool)` |
+| `get_platform_matrix` | Comparison matrix: brand + **automatically discovered** competitors × platform, or topics × platform. Cell `somShare` = records-based Share of Mentions WITHIN that platform column; cells also carry `mentionedRecords` | `dimension: topic\|competitor (default competitor), time_range, platform` |
+| `get_topic_analytics` | Per-topic analysis: sentiment, top **automatically discovered** competitors, response types, trends. Also the way to enumerate topics over MCP | `time_range: 7d\|30d\|90d\|180d\|all\|custom (default 30d; custom requires start_date), start_date, end_date, platform, topic_ids[], include_ungrouped (bool)` |
 | `get_sentiment_dashboard` | Sentiment: distribution, trends, platform comparison, brand correlation | `time_range: 7d\|30d\|90d\|180d, platform` |
 | `get_brand_mention_samples` | Sample recent answers mentioning the brand: raw text + sentiment + extracted context | `time_range, platform, limit (1–30), answer_max_chars (200–4000)` |
 
@@ -174,15 +175,15 @@ sees far fewer.
 
 | Source | Count |
 |---|---|
-| Read-only (brand + GA4 + public-source + `get_current_date`) | 31 |
+| Read-only (brand + GA4 + public-source + `get_current_date`) | 32 |
 | Discovery selectors (`list_brands`, `list_organizations`) — multi-brand/org only | 2 |
 | Write (consent write grants) | 4 |
 | Report (user-scoped) | 2 |
 | Public / industry (Grow+) | 27 |
-| **Max total** | **66** |
+| **Max total** | **67** |
 
-> The read-only 31 includes `get_discovered_links`, which is **inert over MCP** (its source
-> tool `fetch_page` is in-app only) — so 30 are functionally useful. Display sections A–J above
+> The read-only 32 includes `get_discovered_links`, which is **inert over MCP** (its source
+> tool `fetch_page` is in-app only) — so 31 are functionally useful. Display sections A–J above
 > regroup these for navigation; `get_current_date` lives under both "discovery" (display) and
 > the read-only count (source).
 

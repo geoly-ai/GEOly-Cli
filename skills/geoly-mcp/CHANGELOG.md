@@ -2,6 +2,21 @@
 
 All notable changes to the `geoly-mcp` agent skill.
 
+## 0.3.1
+
+- **Tool surface 66 → 67: `list_prompt_records`.** Full execution history of one prompt over a
+  time range, paginated (unlike `get_prompt_record_summaries`, which returns only the latest
+  record per platform). Rows carry `shoppingVisible` for shopping-card trend work; feed a row
+  `id` to `get_prompt_record_detail`. Explicit `start_date`/`end_date` are **UTC+8 business
+  days** and must be paired (they override `time_range`).
+- **Competitor caliber change (2026-07-24, metric-calibers §7).**
+  `get_competitor_overview` / `get_platform_matrix` `somShare` is now records-based Share of
+  Mentions (once per answer ÷ all brand-mentioned records, +`mentionedRecords` field), and
+  their roster is **automatically discovered** competitors — no longer the user-tracked list
+  (`get_competitor_list` keeps returning the tracked list). `get_topic_analytics` top
+  competitors likewise auto-discovered. Old pulls will not reconcile. The SoM glossary row is
+  now split into prompt-level (visibility-based) vs cross-prompt (records-based) calibers.
+
 ## 0.3.0
 
 - **Tool surface 63 → 66: three new tools.** `list_public_shopping_boards` (the cross-category

@@ -15,7 +15,8 @@ number to quote. When in doubt, the headline KPI always comes from `get_brand_ov
 | **mentionRate** | % of answers that mention the brand | completed records | `get_brand_overview` (headline) |
 | **citationRate** | % of answers that cite a brand-owned URL | completed records (prompt-equal) | `get_brand_overview` (headline) |
 | **AIGVR** | composite visibility score `m × (0.4·position + 0.25·frequency + 0.25·citation)` | completed records | `get_brand_overview` (headline) |
-| **Share of Model (SoM)** | brand's share of visibility **vs tracked competitors** | total brand+competitor visibility | `get_prompt_detail`, `get_competitor_overview`, `get_platform_matrix` |
+| **Share of Model (SoM)** — prompt level | brand's share of visibility **vs tracked competitors** for ONE prompt | total brand+competitor visibility | `get_prompt_detail` |
+| **Share of Mentions (SoM)** — cross-prompt | **records-based**: each brand counts at most once per AI answer, vs **automatically discovered** competitors | all brand-mentioned records | `get_competitor_overview`, `get_platform_matrix` (since 2026-07-24; was visibility-weighted) |
 | **recordCitationRate** | pooled `cited records / completed records` (record-weighted) | completed records | `query_analytics` metric |
 
 Distinctions to never blur:
@@ -132,3 +133,10 @@ disagrees with a fresh pull, the fresh pull wins:
 4. **Public AI-search query tools exclude echo rewrites** (the user prompt bounced back
    verbatim by the platform). All `get_public_search_queries` facets and drill-downs count
    fewer — but honest — queries than pre-fix pulls.
+5. *(2026-07-24)* **`get_competitor_overview` / `get_platform_matrix` `somShare` switched to
+   records-based Share of Mentions** (each brand counts at most once per answer ÷ all
+   brand-mentioned records; both tools now also return `mentionedRecords`), and their
+   competitor roster is now **automatically discovered brands** — not the user-tracked
+   competitor list (`get_competitor_list` still returns the tracked list). Old pulls used
+   visibility-weighted shares over tracked competitors and will not reconcile.
+   `get_prompt_detail`'s per-prompt SoM stays visibility-based vs tracked competitors.

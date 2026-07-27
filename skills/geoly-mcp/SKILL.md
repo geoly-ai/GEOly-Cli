@@ -3,13 +3,13 @@ name: geoly-mcp
 description: "Use when querying or reporting on AI brand visibility through the GEOly MCP server — picking the right tool, following the org/brand discovery flow, quoting the correct KPI caliber, and avoiding metric-definition pitfalls. Triggers: GEOly; GEO / AI-visibility reporting; citation rate, mention rate, AIGVR, Share of Model; daily trends; competitor, category whitespace, brand momentum; any call to get_brand_overview / query_analytics / get_prompt_* / get_citation_* / compare_public_brands / get_category_* / get_public_* tools."
 metadata:
   author: geoly
-  version: "0.3.0"
+  version: "0.3.1"
 ---
 
 # GEOly MCP
 
 [GEOly](https://www.geoly.ai) tracks how brands are mentioned and cited across AI engines (ChatGPT, Gemini,
-Perplexity, Grok, Google AI). The MCP server exposes **up to 66 tools** (the exact set depends
+Perplexity, Grok, Google AI). The MCP server exposes **up to 67 tools** (the exact set depends
 on plan, mode, and write grants) across two surfaces:
 
 - **Self / brand-own** — the customer's own monitoring, audits, GA4, and write actions.
@@ -168,6 +168,7 @@ questions in a chat session, keep using the MCP tools.
 | A topic / text-defined **subset** daily series | `query_analytics` dataset=`topic_citations_daily` (+ `prompt_text_include/exclude`) |
 | Per-prompt visibility; search/list prompts | `get_prompt_list` (per-prompt rate in `geoMetrics.aigvr.citationRate`) |
 | One prompt's full detail (per-platform, SoM, competitors) | `get_prompt_detail` |
+| A prompt's **full execution history** over a range (per-day records, e.g. 30-day shopping-card trend) | `list_prompt_records` (explicit `start_date`/`end_date` are UTC+8 business days) |
 | The actual **citation URLs / sources** for a prompt | `get_prompt_citations` (`deduplicate=true` for a source list) |
 | "Which queries never mention us" (blind spots) | `get_prompt_mention_rates` |
 | Citation **domain distribution / ownership** | `get_citation_overview` (counts URLs, not records) |
