@@ -1,4 +1,4 @@
-# GEOly MCP — full tool catalog (up to 67 tools)
+# GEOly MCP — full tool catalog (up to 68 tools)
 
 _Use this when you need a tool's exact parameters/enums/defaults, or to confirm whether a tool is exposed over MCP._
 
@@ -140,13 +140,13 @@ These read cross-topic public citation-source data and need no brand context (NO
 
 ---
 
-## J. Public / industry tools (27) — Grow tier and above
+## J. Public / industry tools (28) — Grow tier and above
 
 The cross-brand competitive-intelligence surface (multi-org: enabled when any accessible org
 qualifies). Full playbook + locale/platform conventions
 in [public-tools.md](./public-tools.md). Most data tools accept an optional `platform` (default
 `chatgpt`) — discover valid platforms per scope with `get_available_platforms`. Quick index
-(all 27):
+(all 28):
 
 **Resolve & browse**: `search_public_entities`, `list_public_topics`, `list_public_locales`,
 `get_available_platforms`
@@ -155,7 +155,7 @@ in [public-tools.md](./public-tools.md). Most data tools accept an optional `pla
 `get_public_topic_prompt_detail`, `get_public_topic_record_detail`,
 `get_public_topic_citation_domains`, `get_public_topic_commerce`,
 `get_topic_competition_difficulty`
-**Brand**: `get_public_brand`, `get_public_brand_perception`,
+**Brand**: `get_public_brand`, `get_public_brand_rank_citation` (AIO-only Rankings × AI Citations), `get_public_brand_perception`,
 `get_public_brand_perception_aspect_mentions`, `compare_public_brands`
 **Category / product-space**: `get_public_category`, `get_category_whitespace`,
 `get_category_brand_momentum`
@@ -179,8 +179,8 @@ sees far fewer.
 | Discovery selectors (`list_brands`, `list_organizations`) — multi-brand/org only | 2 |
 | Write (consent write grants) | 4 |
 | Report (user-scoped) | 2 |
-| Public / industry (Grow+) | 27 |
-| **Max total** | **67** |
+| Public / industry (Grow+) | 28 |
+| **Max total** | **68** |
 
 > The read-only 32 includes `get_discovered_links`, which is **inert over MCP** (its source
 > tool `fetch_page` is in-app only) — so 31 are functionally useful. Display sections A–J above

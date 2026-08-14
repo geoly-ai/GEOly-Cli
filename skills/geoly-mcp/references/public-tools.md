@@ -1,4 +1,4 @@
-# GEOly MCP — public / industry intelligence tools (27)
+# GEOly MCP — public / industry intelligence tools (28)
 
 _Use this when doing cross-brand work (leaderboards, whitespace, momentum, AI-search demand, perception, shopping) or anything involving the locale convention._
 
@@ -89,11 +89,12 @@ category / topic IDs and slugs. Then use the typed tool. `list_public_topics`,
 
 ---
 
-## 3. Brand tools (4)
+## 3. Brand tools (5)
 
 | Tool | Purpose | Key params |
 |---|---|---|
 | `get_public_brand` | One public brand across topics, **faceted** | `brand_id, view, country, language, limit (1–200), include_trend (bool), days (2–90)` |
+| `get_public_brand_rank_citation` | **AIO-only** Rankings × AI Citations: coverage + four quadrants (searches) + displacers (`mode=board`), or per-search detail with per-round stability (`mode=rows`, `snapshot_key` pins consistency) | `brand_id, mode (board/rows), quadrant, page, page_size (1–20), snapshot_key, country, language` |
 | `get_public_brand_perception` | AI perception profile: canonical aspects + polarity + evidence + `hasEnoughSignal` | `brand_id, country, language, limit (1–100), min_mentions_per_aspect` |
 | `get_public_brand_perception_aspect_mentions` | Drill-down: source mentions behind one perception aspect | `brand_id, normalized_label, country, language, limit (1–200)` |
 | `compare_public_brands` | Side-by-side of **2–4** brands on one facet, **shared locale required** | `brand_ids[] (2–4), view, country (required), language (required), limit (1–200), include_trend (bool), days (2–90)` |

@@ -3,13 +3,13 @@ name: geoly-mcp
 description: "Use when querying or reporting on AI brand visibility through the GEOly MCP server — picking the right tool, following the org/brand discovery flow, quoting the correct KPI caliber, and avoiding metric-definition pitfalls. Triggers: GEOly; GEO / AI-visibility reporting; citation rate, mention rate, AIGVR, Share of Model; daily trends; competitor, category whitespace, brand momentum; any call to get_brand_overview / query_analytics / get_prompt_* / get_citation_* / compare_public_brands / get_category_* / get_public_* tools."
 metadata:
   author: geoly
-  version: "0.3.1"
+  version: "0.4.1"
 ---
 
 # GEOly MCP
 
 [GEOly](https://www.geoly.ai) tracks how brands are mentioned and cited across AI engines (ChatGPT,
-Perplexity, Google AI Mode, Google AI Overview, Gemini, Copilot). The MCP server exposes **up to 67 tools** (the exact set depends
+Perplexity, Google AI Mode, Google AI Overview, Gemini, Copilot). The MCP server exposes **up to 68 tools** (the exact set depends
 on plan, mode, and write grants) across two surfaces:
 
 - **Self / brand-own** — the customer's own monitoring, audits, GA4, and write actions.
@@ -21,14 +21,26 @@ metric name) or **flow mistakes** (calling a brand tool before resolving which b
 ## If the GEOly tools aren't available in this session (pre-flight auto-authorize)
 
 If the GEOly MCP tools (e.g. `list_brands`, `get_brand_overview`) are **not** in your available
-tool list — or a call fails to connect — the `geoly` server is registered but not usable in *this*
-session, usually for one of two reasons: it was **never authenticated** (Codex shows an **Authenticate /
-进行身份验证** button next to `geoly` under *Settings → MCP servers*), or the session **started
-before** it was authenticated. Fix it **proactively** — don't make the user hunt for the button,
-and do **not** probe the endpoint by hand (a raw HTTP request without the stored OAuth token
-returns `401`, which is expected and proves nothing). Run this pre-flight, in order:
+tool list, the `geoly` server may be unauthenticated or the session may have started before the
+tools were mounted. If a tool is present but a call fails, **classify the error before taking any
+auth action**. Do not turn every access error into a login loop:
 
-1. **Open the sign-in window for them.** Run the shell command `codex mcp login geoly`. For this
+| Error signal | What it means | Correct recovery |
+|---|---|---|
+| `AUTH_REQUIRED`, HTTP 401 with `WWW-Authenticate`, or the UI explicitly says unauthenticated | OAuth credentials are missing or invalid | Run the login flow below |
+| `MCP_SETUP_REQUIRED` | The signed-in user has not completed workspace onboarding | Continue the browser setup opened by the MCP authorization flow; finish onboarding, then review the consent screen |
+| `ORGANIZATION_REQUIRED` | GEOly could not find or prepare a usable organization | Ask the user to create/join an organization or contact GEOly support; do not re-login |
+| `SUBSCRIPTION_REQUIRED`, `SUBSCRIPTION_INACTIVE`, or HTTP 402 | No selected organization has active entitlement | Send the user to `https://app.geoly.ai/settings/billing`; do not re-login |
+| `ORG_SELECTION_REQUIRED` | The saved organization scope is no longer valid or includes unavailable organizations | Restart authorization and choose one active organization explicitly; do not re-login |
+| Transport timeout / connection failure without an auth code | Network or client transport problem | Retry once, then inspect transport/client state; do not assume auth failure |
+
+For a genuine auth-required or not-yet-mounted case, fix it **proactively** — don't make the user
+hunt for the button, and do **not** probe the endpoint by hand (a raw HTTP request without the
+stored OAuth token returns `401`, which is expected and proves nothing). Run this pre-flight, in
+order:
+
+1. **Open the sign-in window for them.** Only for the auth-required/not-mounted cases above, run
+   the shell command `codex mcp login geoly`. For this
    OAuth (streamable-HTTP) server that starts the GEOly OAuth flow and opens the authorization page
    in the browser, so the user signs in with their GEOly account instead of hunting for the
    Authenticate button. (If a valid, unexpired login already exists, it usually completes without
@@ -118,13 +130,59 @@ public/report tools) and paginate (`currentPage == totalPages`) instead of assum
   `get_public_*` / `compare_public_brands` / `get_category_*` aren't available, no accessible
   org has the tier or an active entitlement. (The three public **source** tools —
   `get_public_sources_overview` / `get_public_source_domain_detail` /
-  `get_public_source_brand_conduit` — are NOT plan-gated: every token has them.)
+  `get_public_source_brand_conduit` — are NOT plan-gated and are **free**: every token has
+  them and they never consume quota credits.)
 - **Writes** (`create_prompt`, `create_topic`, `create_competitor`, `trigger_prompt`) require
   **write access granted on the OAuth consent screen** (a per-resource read/write grid; the
   default is all-read, no-write). The legacy `geom_` static token is always read-only, and
   **multi-org connections are always read-only** (write grants are clamped). `trigger_prompt`
-  **consumes credits**.
+  really fires a scrape run (real work), so it always needs explicit intent — but it does
+  **not** consume quota credits.
 - **Dates**: call `get_current_date` before building date ranges; `query_analytics` ranges ≤ 366 days.
+
+## What costs credits (and what's free)
+
+Only the **public / industry-intelligence** tools consume quota credits, and only on **Grow-tier
+or above**: the cross-brand `get_public_*`, `compare_public_brands`, `get_category_*`, and
+`get_topic_competition_difficulty` tools, plus the ranked-content listings
+`list_public_shopping_boards` and `list_public_topic_prompts` (1 credit/row). Everything else is
+**free and unmetered** (within fair-use rate limits): your own brand's monitoring, audits, GA4,
+and writes (including `trigger_prompt`), the three public source tools
+(`get_public_sources_overview` / `get_public_source_domain_detail` /
+`get_public_source_brand_conduit`), plus all discovery/navigation (`list_organizations`,
+`list_brands`, `search_public_entities`, `list_public_topics`, `list_public_locales`,
+`get_available_platforms`, `get_quota`). So: **point an agent at the customer's own brand and full GEO reporting runs free**;
+credits only meter cross-brand competitive intelligence.
+
+### Spending credits wisely (only relevant once you touch public tools)
+
+Credits are an org-wide monthly pool shared across all seats. To make them last **without
+shipping a shallower report**:
+
+1. **Discovery is always free — locate first, then pay to read.** Use the free
+   `search_public_entities` / `list_public_topics` / `get_public_search_queries` (mode
+   `product_spaces`) to find the exact topic/brand/space id **before** spending on content tools.
+2. **Budget at the start of a multi-tool research task.** Call `get_quota` (free) once up front;
+   if `remaining` is low, prioritise the calls that carry the conclusion.
+3. **Budget by rows returned, not by tier name.** Credits are charged **per row of data
+   returned** (1/3/10 per row by tier), so cost scales with result size, not with the tool's
+   "light/standard/deep" label. A single-object KPI (`get_public_brand` view=`visibility`) costs
+   10 — one row — while a 50-brand `leaderboard` costs 150 (50 rows × 3). Estimate a call as
+   `rows × per-row-rate`, and pass a `page_size`/`limit` no larger than you actually need (an
+   over-large request pre-holds more, refunded down to the rows actually returned).
+4. **Two-stage, quality-gated.** Cheap tools (`overview` views, `1`-credit lookups) are for
+   **triage/locating** — deciding what's worth a deep read. But when the answer depends on
+   evidence (rankings, momentum, perception, per-prompt records, competitive standing), you
+   **must** still call the deep tool (`get_public_topic_prompt_matrix`, `compare_public_brands`,
+   `get_public_brand_perception`, `get_public_topic_prompt_detail`, `get_category_*`). Never skip a
+   deep call *to save credits* and hand back a thinner report — tell the user credits are low
+   instead. Cost-efficiency means **not wasting** calls, not **under-delivering**.
+5. **Don't blind-retry a wall.** `QUOTA_EXCEEDED` and `CIRCUIT_OPEN` are deterministic — retrying
+   the identical call just fails again. Narrow the scope, switch to a cheaper tool that still
+   answers, or tell the user the quota is exhausted (free tools still work). The `_quota` field on
+   every paid result (`cost`, `remaining`, `warning`) is your running budget signal. When a
+   `QUOTA_EXCEEDED` says `max_affordable_limit`, retry the same tool with `page_size`/`limit` set
+   to that value — a smaller page still returns everything for a small topic.
 
 ## GEOly CLI — bulk & scripted access (optional; prefer for loops/exports)
 
@@ -207,6 +265,7 @@ questions in a chat session, keep using the MCP tools.
 | One product's full AI analysis (shelves, trend, rivals, channels) | `get_public_shopping_product_detail` |
 | Compare 2–4 brands head-to-head | `compare_public_brands` (country+language **required**) |
 | How AI perceives a brand | `get_public_brand_perception` → `…_aspect_mentions` |
+| Does Google ranking convert into AI Overview citations (AIO only) | `get_public_brand_rank_citation` (board → rows) |
 | Is a topic worth targeting | `get_topic_competition_difficulty` |
 | Bridge my brand → public dataset | `resolve_my_brand_public` |
 

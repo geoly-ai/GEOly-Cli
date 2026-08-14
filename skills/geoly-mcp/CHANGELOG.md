@@ -2,6 +2,22 @@
 
 All notable changes to the `geoly-mcp` agent skill.
 
+## 0.4.1
+
+- **New public tool `get_public_brand_rank_citation` (Google AI Overview only).** Rankings ×
+  AI Citations cross-view: does organic top-10 ranking convert into an AI Overview citation?
+  `mode=board` returns coverage, four search-counting quadrants (count/prevCount) and displacer
+  domains with a competitor heuristic; `mode=rows` returns paginated per-search detail with
+  per-round stability (null = no valid observation) and `snapshot_key` consistency pinning.
+  Public tool count 27 → 28.
+
+## 0.3.2
+
+- Classify MCP setup, organization, subscription, and organization-selection errors before
+  attempting OAuth again. Only genuine `AUTH_REQUIRED`/401 states trigger
+  `codex mcp login geoly`, preventing entitlement and onboarding failures from becoming
+  reauthorization loops.
+
 ## 0.3.1
 
 - **Platform lineup refresh: Grok retired.** The engine roster is now ChatGPT, Perplexity,
