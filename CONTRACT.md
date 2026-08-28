@@ -8,12 +8,13 @@ change without notice.
 | Surface | Stability |
 |---|---|
 | Flags, output behavior, exit codes | **Stable** — breaking changes only with a major version |
-| Command set listed below (`auth`, `tools`, `schema`, `call`, `upgrade`, `completions`) | Stable |
+| Command set listed below (interactive `geoly`, `ask`, `auth`, `tools`, `schema`, `call`, `upgrade`, `completions`) | Stable |
 | Tool names and input schemas | **Not stable** — they come from the GEOly MCP server at runtime. Probe with `geoly tools --json` before calling. |
 
 ## Commands (v0)
 
 ```
+geoly                       [--brand <id>] [--locale zh|en] [--continue]
 geoly auth login [--profile <name>] [--no-browser]
 geoly auth status
 geoly auth logout
@@ -31,7 +32,13 @@ geoly completions <shell>
   presence-based. Arrays/objects take JSON strings. `--data '<json>'` passes the whole
   argument object; `--input -` reads it from stdin. Individual flags override same-name
   fields from `--data`/`--input`.
-- `geoly ask` is the agent entry point. The loop runs **in this process**: it fetches the
+- **`geoly` with no arguments is the product**: an interactive session. You type, the agent
+  works, you watch what it runs. `/help` lists the in-session commands (`/new`, `/memory`,
+  `/tools`, `/exit`); Ctrl-C interrupts the running turn without ending the session, Ctrl-D
+  exits. `--continue` resumes the most recent session for the resolved brand. Piped stdin
+  (`echo "..." | geoly`) answers once and exits. Transcripts are written to
+  `~/.geoly/sessions/<id>.jsonl`.
+- `geoly ask` is the same agent, non-interactive, for scripts. The loop runs **in this process**: it fetches the
   system prompt and step budget from the server, lists your tools over MCP, and then drives
   the model — picking tools, running them, feeding results back — until it can answer.
   Inference is hosted and metered on your organization's plan; the loop, the transcript and

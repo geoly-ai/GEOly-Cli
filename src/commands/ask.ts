@@ -13,7 +13,7 @@
 import { Command, Option } from 'clipanion';
 import { Ctx } from '../context.js';
 import { GeolyError } from '../errors.js';
-import { LoopEvent, runLoop } from '../loop.js';
+import { AgentSession } from '../loop.js';
 import { printResult, status } from '../output.js';
 import { GeolyCommand } from './base.js';
 
@@ -42,23 +42,22 @@ export class AskCommand extends GeolyCommand {
     const streaming = ctx.output === 'raw';
     const chunks: string[] = [];
     const toolsUsed: string[] = [];
-    let ready: Extract<LoopEvent, { type: 'ready' }> | undefined;
-    let done: Extract<LoopEvent, { type: 'done' }> | undefined;
+    let done: { steps: number; turnTokens: number; stopped: string } | undefined;
 
-    for await (const event of runLoop(ctx, {
-      question,
+    const session = await AgentSession.create(ctx, {
       brandId: this.brand,
       locale: this.locale as 'zh' | 'en' | undefined,
-    })) {
+    });
+    status(
+      ctx,
+      `· ${session.profile.brand.name} · ${session.profile.model} · ${session.toolCount} tools` +
+        (session.memoryCount > 0
+          ? ` · ${session.memoryCount} memory note${session.memoryCount === 1 ? '' : 's'}`
+          : ''),
+    );
+
+    for await (const event of session.run(question)) {
       switch (event.type) {
-        case 'ready':
-          ready = event;
-          status(
-            ctx,
-            `· ${event.profile.brand.name} · ${event.profile.model} · ${event.toolCount} tools` +
-              (event.memoryNotes > 0 ? ` · ${event.memoryNotes} memory notes` : ''),
-          );
-          break;
         case 'text':
           if (streaming) process.stdout.write(event.text);
           else chunks.push(event.text);
@@ -83,17 +82,17 @@ export class AskCommand extends GeolyCommand {
       process.stdout.write('\n');
     } else {
       printResult(ctx, {
-        brand: ready?.profile.brand ?? null,
-        model: ready?.profile.model ?? null,
+        brand: session.profile.brand,
+        model: session.profile.model,
         text: chunks.join(''),
         tools: toolsUsed,
         steps: done?.steps ?? null,
-        usage: done ? { total: done.totalTokens } : null,
+        usage: done ? { total: done.turnTokens } : null,
       });
     }
     if (done) {
       const budget = done.stopped === 'budget' ? ' · step budget reached' : '';
-      status(ctx, `· ${done.steps} steps · ${done.totalTokens} tokens${budget}`);
+      status(ctx, `· ${done.steps} steps · ${done.turnTokens} tokens${budget}`);
     }
     return 0;
   }
