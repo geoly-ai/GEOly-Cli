@@ -1,26 +1,26 @@
 /**
- * `geoly ask "<question>"` — one turn with the hosted GEO agent.
+ * `geoly ask "<question>"` — one question, answered by the local agent worker.
  *
- * Unlike `geoly call`, which executes a single named tool, `ask` hands the
- * question to the server-side agent: it picks the tools, runs as many steps as
- * it needs, and answers. The tool surface is the same one `geoly tools` lists.
+ * Unlike `geoly call`, which runs one named tool, `ask` hands the question to
+ * the agent loop running in this process: it picks tools, runs them, and keeps
+ * going until it can answer. Inference is hosted and metered; the loop, the
+ * memory, and the transcript are local.
  *
  * Output contract (CONTRACT.md) is preserved: stdout is the data channel
- * (`--output json` envelope by default, `--output raw` streams the answer text
- * live), while tool activity and the usage summary go to stderr and are
- * silenced by `-q`.
+ * (`--output json` envelope by default, `--output raw` streams the answer live),
+ * while step/tool progress and the usage summary go to stderr and `-q` silences them.
  */
 import { Command, Option } from 'clipanion';
-import { AgentEvent, runAgentTurn } from '../agent.js';
 import { Ctx } from '../context.js';
 import { GeolyError } from '../errors.js';
+import { LoopEvent, runLoop } from '../loop.js';
 import { printResult, status } from '../output.js';
 import { GeolyCommand } from './base.js';
 
 export class AskCommand extends GeolyCommand {
   static paths = [['ask']];
   static usage = Command.Usage({
-    description: 'Ask the hosted GEO agent a question; it picks and runs the tools itself.',
+    description: 'Ask the GEO agent a question; it picks and runs the tools itself.',
     examples: [
       ['Plain question', 'geoly ask "how did our visibility move over the last 30 days?"'],
       ['Stream the answer as text', 'geoly ask --output raw "which sources cite us most?"'],
@@ -42,19 +42,22 @@ export class AskCommand extends GeolyCommand {
     const streaming = ctx.output === 'raw';
     const chunks: string[] = [];
     const toolsUsed: string[] = [];
-    let meta: Extract<AgentEvent, { type: 'ready' }> | undefined;
-    let done: Extract<AgentEvent, { type: 'done' }> | undefined;
-    let failure: string | undefined;
+    let ready: Extract<LoopEvent, { type: 'ready' }> | undefined;
+    let done: Extract<LoopEvent, { type: 'done' }> | undefined;
 
-    for await (const event of runAgentTurn(ctx, {
-      messages: [{ role: 'user', content: question }],
+    for await (const event of runLoop(ctx, {
+      question,
       brandId: this.brand,
       locale: this.locale as 'zh' | 'en' | undefined,
     })) {
       switch (event.type) {
         case 'ready':
-          meta = event;
-          status(ctx, `· ${event.brand.name} · ${event.model}`);
+          ready = event;
+          status(
+            ctx,
+            `· ${event.profile.brand.name} · ${event.profile.model} · ${event.toolCount} tools` +
+              (event.memoryNotes > 0 ? ` · ${event.memoryNotes} memory notes` : ''),
+          );
           break;
         case 'text':
           if (streaming) process.stdout.write(event.text);
@@ -71,32 +74,26 @@ export class AskCommand extends GeolyCommand {
         case 'done':
           done = event;
           break;
-        case 'error':
-          failure = event.message;
+        case 'step':
           break;
       }
     }
 
-    if (failure) throw new GeolyError('tool_error', `Agent run failed: ${failure}`);
-
     if (streaming) {
-      // Live mode already wrote the answer; close the line and summarize on stderr.
-      if (chunks.length === 0) process.stdout.write('\n');
+      process.stdout.write('\n');
     } else {
       printResult(ctx, {
-        brand: meta?.brand ?? null,
-        model: meta?.model ?? null,
+        brand: ready?.profile.brand ?? null,
+        model: ready?.profile.model ?? null,
         text: chunks.join(''),
         tools: toolsUsed,
-        usage: done?.usage ?? null,
-        finishReason: done?.finish_reason ?? null,
+        steps: done?.steps ?? null,
+        usage: done ? { total: done.totalTokens } : null,
       });
     }
     if (done) {
-      status(
-        ctx,
-        `· ${done.usage.total} tokens · ${Math.round(done.duration_ms / 1000)}s · ${done.finish_reason}`,
-      );
+      const budget = done.stopped === 'budget' ? ' · step budget reached' : '';
+      status(ctx, `· ${done.steps} steps · ${done.totalTokens} tokens${budget}`);
     }
     return 0;
   }

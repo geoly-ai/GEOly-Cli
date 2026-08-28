@@ -31,12 +31,23 @@ geoly completions <shell>
   presence-based. Arrays/objects take JSON strings. `--data '<json>'` passes the whole
   argument object; `--input -` reads it from stdin. Individual flags override same-name
   fields from `--data`/`--input`.
-- `geoly ask` is the agent entry point: the question goes to the hosted GEO agent, which
-  picks and runs tools itself over the same surface and answers. It streams — `--output raw`
-  writes the answer to stdout as it arrives; the default `--output json` prints one envelope
-  (`text`, `tools`, `usage`, `brand`, `model`) at the end. Tool activity and the usage
-  summary go to stderr (`-q` silences them). Hosted inference requires an active
-  subscription (exit code for `subscription_required` on 402).
+- `geoly ask` is the agent entry point. The loop runs **in this process**: it fetches the
+  system prompt and step budget from the server, lists your tools over MCP, and then drives
+  the model — picking tools, running them, feeding results back — until it can answer.
+  Inference is hosted and metered on your organization's plan; the loop, the transcript and
+  the memory file stay on your machine. `--output raw` streams the answer to stdout as it
+  arrives; the default `--output json` prints one envelope (`text`, `tools`, `steps`,
+  `usage`, `brand`, `model`) at the end. Step/tool progress and the usage summary go to
+  stderr (`-q` silences them). Requires an active subscription (402 →
+  `subscription_required`); a per-organization daily model budget returns 429.
+
+## Memory
+
+`geoly ask` reads `~/.geoly/memory/<brand-id>.md` at the start of every turn and puts it in
+the agent's context. The agent writes to it through its `remember` tool; you write to it by
+opening the file. Format is plain markdown — `## <slug>` heading, then the note. Up to 50
+notes, 800 characters each; past that the agent is told to consolidate and decides what to
+drop. Nothing is uploaded: memory is local, per machine, and not shared with your team.
 
 ## Authentication
 

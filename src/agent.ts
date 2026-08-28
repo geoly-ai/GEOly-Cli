@@ -1,78 +1,61 @@
 /**
- * Streaming client for the hosted GEO agent (`POST /api/agent/run`, NDJSON).
+ * HTTP layer for the local agent worker.
  *
- * Deliberately separate from McpClient: the agent endpoint is not JSON-RPC and
- * not a tool call — it is one long-lived streaming turn. What it shares with
- * McpClient is the credential path (`ensureAccessToken`, one lazy re-auth on
- * 401) and the HTTP status → GeolyError mapping, so `geoly ask` fails the same
- * way `geoly call` does.
+ * The loop runs on your machine (see loop.ts); the server keeps only two things:
+ * `/api/agent/profile` — the system prompt and step budget, so the methodology
+ * can change without a CLI release — and `/api/agent/completions` — a metered
+ * proxy that runs inference on GEOly's key and bills it to your org.
  *
- * The server holds no conversation state; history is sent on every turn.
+ * Credentials and error mapping are shared with McpClient so `geoly ask` fails
+ * the same way `geoly call` does.
  */
 import { Ctx, autoAuthAllowed } from './context.js';
 import { GeolyError } from './errors.js';
 import { ensureAccessToken } from './oauth.js';
 import { VERSION } from './version.js';
 
-/** No bytes for this long ⇒ the run is considered dead (a tool call can legitimately take ~45s). */
-const IDLE_TIMEOUT_MS = 120_000;
-/** Outer bound; the server's own route cap is lower (maxDuration 300s). */
-const TOTAL_TIMEOUT_MS = 600_000;
+/** No bytes from the model for this long ⇒ the step is dead. */
+const STREAM_IDLE_TIMEOUT_MS = 120_000;
 
-export interface AgentTurnInput {
-  messages: Array<{ role: 'user' | 'assistant'; content: string }>;
-  brandId?: string;
-  locale?: 'zh' | 'en';
+export interface AgentProfile {
+  brand: { id: string; name: string };
+  model: string;
+  max_steps: number;
+  system_prompt: string;
 }
 
-export type AgentEvent =
-  | { type: 'ready'; brand: { id: string; name: string }; model: string; max_steps: number }
-  | { type: 'text'; text: string }
-  | { type: 'tool'; phase: 'call' | 'result' | 'error'; name: string; message?: string }
-  | {
-      type: 'done';
-      finish_reason: string;
-      usage: { input: number; output: number; total: number };
-      duration_ms: number;
-    }
-  | { type: 'error'; message: string };
+/** One assembled tool call from the model. */
+export interface ToolCall {
+  id: string;
+  name: string;
+  /** Raw JSON string as emitted by the model; parsed by the caller so it can report bad JSON. */
+  arguments: string;
+}
 
-/** Agent endpoint derived from the configured MCP endpoint (same origin, same allowlist guard). */
-function agentUrl(ctx: Ctx): string {
+export type CompletionChunk =
+  | { type: 'text'; text: string }
+  | { type: 'tool_calls'; calls: ToolCall[] }
+  | { type: 'finish'; reason: string; totalTokens: number };
+
+/** Same-origin sibling of the configured MCP endpoint (endpoint allowlist already applied). */
+function apiUrl(ctx: Ctx, pathname: string, params?: Record<string, string | undefined>): string {
   const url = new URL(ctx.endpoint);
-  url.pathname = '/api/agent/run';
+  url.pathname = pathname;
   url.search = '';
   if (ctx.org) url.searchParams.set('org_id', ctx.org);
+  for (const [k, v] of Object.entries(params ?? {})) {
+    if (v) url.searchParams.set(k, v);
+  }
   return url.toString();
 }
 
-/** One POST attempt. Returns the response; auth retry is handled by the caller. */
-async function postTurn(ctx: Ctx, input: AgentTurnInput, token: string, signal: AbortSignal): Promise<Response> {
-  try {
-    return await fetch(agentUrl(ctx), {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        accept: 'application/x-ndjson',
-        authorization: `Bearer ${token}`,
-        'x-client-name': 'geoly-cli',
-        'x-client-version': VERSION,
-      },
-      body: JSON.stringify({
-        messages: input.messages,
-        brand_id: input.brandId,
-        locale: input.locale,
-      }),
-      signal,
-    });
-  } catch (err) {
-    const aborted = err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
-    throw new GeolyError(
-      'upstream_unavailable',
-      aborted ? 'Agent run timed out' : `Network error: ${(err as Error).message}`,
-      { cause: err },
-    );
-  }
+function headers(token: string): Record<string, string> {
+  return {
+    'content-type': 'application/json',
+    authorization: `Bearer ${token}`,
+    'x-client-name': 'geoly-cli',
+    'x-client-version': VERSION,
+  };
 }
 
 /** Map a non-2xx agent response onto the CLI's error contract (mirrors mcp.ts). */
@@ -88,83 +71,154 @@ async function throwForStatus(res: Response): Promise<never> {
   if (res.status === 402) {
     throw new GeolyError('subscription_required', 'Subscription is inactive for this organization (HTTP 402)', {
       status: 402,
-      hint: 'The hosted agent runs on your plan. Upgrade at https://app.geoly.ai/settings/billing.',
+      hint: 'Hosted inference runs on your plan: https://app.geoly.ai/settings/billing',
     });
   }
   if (res.status === 403) {
     throw new GeolyError('grant_missing', `Not allowed for this authorization: ${error}`, { status: 403 });
   }
-  if (res.status === 404 || res.status === 400) {
-    throw new GeolyError('usage_error', error || `Agent rejected the request (HTTP ${res.status})`, {
-      status: res.status,
+  if (res.status === 429) {
+    throw new GeolyError('rate_limited', `Daily model budget reached for this organization (${error})`, {
+      status: 429,
     });
   }
-  if (res.status === 429) {
-    throw new GeolyError('rate_limited', 'Rate limited (HTTP 429)', { status: 429 });
+  if (res.status === 400 || res.status === 404 || res.status === 413) {
+    throw new GeolyError('usage_error', error || `Rejected (HTTP ${res.status})`, { status: res.status });
   }
   throw new GeolyError('upstream_unavailable', `GEOly service error (HTTP ${res.status}): ${error}`, {
     status: res.status,
   });
 }
 
-/**
- * Run one turn and yield events as they arrive.
- *
- * The stream is framed as one JSON object per line; a partial trailing line is
- * carried across chunks. Idle and total deadlines both abort the underlying
- * request, so a stalled upstream cannot hang the terminal forever.
- */
-export async function* runAgentTurn(ctx: Ctx, input: AgentTurnInput): AsyncGenerator<AgentEvent> {
+/** Fetch with one lazy re-auth on 401, matching McpClient's behavior. */
+async function authedFetch(ctx: Ctx, url: string, init: RequestInit): Promise<Response> {
   let token = await ensureAccessToken(ctx);
+  let res: Response;
+  try {
+    res = await fetch(url, { ...init, headers: headers(token) });
+  } catch (err) {
+    throw new GeolyError('upstream_unavailable', `Network error: ${(err as Error).message}`, { cause: err });
+  }
+  if (res.status === 401) {
+    await res.arrayBuffer().catch(() => undefined);
+    if (ctx.staticToken || !autoAuthAllowed(ctx)) {
+      throw new GeolyError('auth_expired', 'Authentication failed (HTTP 401)', { status: 401 });
+    }
+    token = await ensureAccessToken(ctx, true);
+    try {
+      res = await fetch(url, { ...init, headers: headers(token) });
+    } catch (err) {
+      throw new GeolyError('upstream_unavailable', `Network error: ${(err as Error).message}`, { cause: err });
+    }
+  }
+  return res;
+}
+
+/** The server-held half of the agent: system prompt, step budget, resolved brand. */
+export async function fetchProfile(
+  ctx: Ctx,
+  opts: { brandId?: string; locale?: 'zh' | 'en' } = {},
+): Promise<AgentProfile> {
+  const res = await authedFetch(
+    ctx,
+    apiUrl(ctx, '/api/agent/profile', { brand_id: opts.brandId, locale: opts.locale }),
+    { method: 'GET', signal: AbortSignal.timeout(ctx.timeoutMs) },
+  );
+  if (!res.ok) await throwForStatus(res);
+  return (await res.json()) as AgentProfile;
+}
+
+/**
+ * Stream one model step through the metered proxy.
+ *
+ * Emits text as it arrives, then one `tool_calls` chunk once the model's calls
+ * are fully assembled (streamed tool arguments arrive in fragments keyed by
+ * index, so they cannot be acted on until the step finishes).
+ */
+export async function* streamCompletion(
+  ctx: Ctx,
+  body: { messages: unknown[]; tools?: unknown[] },
+  signal?: AbortSignal,
+): AsyncGenerator<CompletionChunk> {
   const controller = new AbortController();
-  const total = setTimeout(() => controller.abort(), TOTAL_TIMEOUT_MS);
-  let idle = setTimeout(() => controller.abort(), IDLE_TIMEOUT_MS);
-  const resetIdle = () => {
-    clearTimeout(idle);
-    idle = setTimeout(() => controller.abort(), IDLE_TIMEOUT_MS);
-  };
+  const onAbort = () => controller.abort();
+  signal?.addEventListener('abort', onAbort, { once: true });
+  let idle = setTimeout(() => controller.abort(), STREAM_IDLE_TIMEOUT_MS);
 
   try {
-    let res = await postTurn(ctx, input, token, controller.signal);
-    if (res.status === 401) {
-      await res.arrayBuffer().catch(() => undefined);
-      if (ctx.staticToken || !autoAuthAllowed(ctx)) {
-        throw new GeolyError('auth_expired', 'Authentication failed (HTTP 401)', { status: 401 });
-      }
-      token = await ensureAccessToken(ctx, true); // expired → re-run the browser flow once
-      res = await postTurn(ctx, input, token, controller.signal);
-    }
+    const res = await authedFetch(ctx, apiUrl(ctx, '/api/agent/completions'), {
+      method: 'POST',
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
     if (!res.ok || !res.body) await throwForStatus(res);
 
     const decoder = new TextDecoder();
-    let buffer = '';
-    // Node 18+ web streams are async-iterable at runtime.
+    let tail = '';
+    let finishReason = 'stop';
+    let totalTokens = 0;
+    const calls = new Map<number, ToolCall>();
+
     for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
-      resetIdle();
-      buffer += decoder.decode(chunk, { stream: true });
-      let newline = buffer.indexOf('\n');
-      while (newline >= 0) {
-        const line = buffer.slice(0, newline).trim();
-        buffer = buffer.slice(newline + 1);
-        newline = buffer.indexOf('\n');
-        if (!line) continue;
+      clearTimeout(idle);
+      idle = setTimeout(() => controller.abort(), STREAM_IDLE_TIMEOUT_MS);
+      tail += decoder.decode(chunk, { stream: true });
+      const lines = tail.split('\n');
+      tail = lines.pop() ?? '';
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith('data:')) continue;
+        const payload = trimmed.slice(5).trim();
+        if (!payload || payload === '[DONE]') continue;
+        let parsed: {
+          choices?: Array<{
+            delta?: {
+              content?: string;
+              tool_calls?: Array<{
+                index?: number;
+                id?: string;
+                function?: { name?: string; arguments?: string };
+              }>;
+            };
+            finish_reason?: string | null;
+          }>;
+          usage?: { total_tokens?: number };
+        };
         try {
-          yield JSON.parse(line) as AgentEvent;
+          parsed = JSON.parse(payload);
         } catch {
-          // A malformed line is a server bug, not a reason to kill the turn.
+          continue; // heartbeat / comment line
         }
+        if (typeof parsed.usage?.total_tokens === 'number') totalTokens = parsed.usage.total_tokens;
+        const choice = parsed.choices?.[0];
+        if (!choice) continue;
+        if (choice.delta?.content) yield { type: 'text', text: choice.delta.content };
+        for (const delta of choice.delta?.tool_calls ?? []) {
+          const index = delta.index ?? 0;
+          const current = calls.get(index) ?? { id: '', name: '', arguments: '' };
+          if (delta.id) current.id = delta.id;
+          if (delta.function?.name) current.name += delta.function.name;
+          if (delta.function?.arguments) current.arguments += delta.function.arguments;
+          calls.set(index, current);
+        }
+        if (choice.finish_reason) finishReason = choice.finish_reason;
       }
     }
+
+    if (calls.size > 0) {
+      yield { type: 'tool_calls', calls: [...calls.entries()].sort((a, b) => a[0] - b[0]).map(([, c]) => c) };
+    }
+    yield { type: 'finish', reason: finishReason, totalTokens };
   } catch (err) {
     if (err instanceof GeolyError) throw err;
     const aborted = err instanceof Error && err.name === 'AbortError';
     throw new GeolyError(
       'upstream_unavailable',
-      aborted ? 'Agent run timed out with no output' : `Agent stream failed: ${(err as Error).message}`,
+      aborted ? 'Model stream stalled with no output' : `Model stream failed: ${(err as Error).message}`,
       { cause: err },
     );
   } finally {
-    clearTimeout(total);
     clearTimeout(idle);
+    signal?.removeEventListener('abort', onAbort);
   }
 }
