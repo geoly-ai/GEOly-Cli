@@ -185,19 +185,17 @@ export async function fetchPage(rawUrl: string): Promise<FetchedPage | { error: 
 
 export const FETCH_TOOL = {
   type: 'function' as const,
-  function: {
-    name: 'fetch_page',
-    description:
-      'Fetch a public web page and return its readable text (plus title and meta description). ' +
-      'Runs from this machine with a plain HTTP client and does NOT execute JavaScript — which is ' +
-      'the point: it shows roughly what a non-rendering crawler sees. Use it to look at the ' +
-      "brand's own pages, a competitor's page, or a cited source, when the question is about why " +
-      'an AI answer says what it says. Private and loopback addresses are refused.',
-    parameters: {
-      type: 'object',
-      properties: { url: { type: 'string', description: 'Full http(s) URL.' } },
-      required: ['url'],
-    },
+  name: 'fetch_page',
+  description:
+    'Fetch a public web page and return its readable text (plus title and meta description). ' +
+    'Runs from this machine with a plain HTTP client and does NOT execute JavaScript — which is ' +
+    'the point: it shows roughly what a non-rendering crawler sees. Use it to look at the ' +
+    "brand's own pages, a competitor's page, or a cited source, when the question is about why " +
+    'an AI answer says what it says. Private and loopback addresses are refused.',
+  parameters: {
+    type: 'object',
+    properties: { url: { type: 'string', description: 'Full http(s) URL.' } },
+    required: ['url'],
   },
 };
 

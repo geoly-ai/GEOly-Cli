@@ -152,78 +152,70 @@ export class Workspace {
 export const WORKSPACE_TOOLS = [
   {
     type: 'function' as const,
-    function: {
-      name: 'write_file',
-      description:
-        'Write a file into the user working directory — reports, exports, notes, anything you ' +
-        'produced that should outlive this session. Prefer this over pasting long output into ' +
-        'the reply: the file keeps the detail, the reply keeps the point. The user is asked to ' +
-        'approve the first write.',
-      parameters: {
-        type: 'object',
-        properties: {
-          path: { type: 'string', description: 'Relative path, e.g. "geo-report.md" or "exports/citations.csv"' },
-          content: { type: 'string', description: 'Full file content.' },
-        },
-        required: ['path', 'content'],
+    name: 'write_file',
+    description:
+      'Write a file into the user working directory — reports, exports, notes, anything you ' +
+      'produced that should outlive this session. Prefer this over pasting long output into ' +
+      'the reply: the file keeps the detail, the reply keeps the point. The user is asked to ' +
+      'approve the first write.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Relative path, e.g. "geo-report.md" or "exports/citations.csv"' },
+        content: { type: 'string', description: 'Full file content.' },
       },
+      required: ['path', 'content'],
     },
   },
   {
     type: 'function' as const,
-    function: {
-      name: 'read_file',
-      description:
-        'Read a file from the user working directory — an earlier report of yours, their notes, ' +
-        'a sitemap or content file they want analysed.',
-      parameters: {
-        type: 'object',
-        properties: { path: { type: 'string', description: 'Relative path.' } },
-        required: ['path'],
-      },
+    name: 'read_file',
+    description:
+      'Read a file from the user working directory — an earlier report of yours, their notes, ' +
+      'a sitemap or content file they want analysed.',
+    parameters: {
+      type: 'object',
+      properties: { path: { type: 'string', description: 'Relative path.' } },
+      required: ['path'],
     },
   },
   {
     type: 'function' as const,
-    function: {
-      name: 'list_files',
-      description: 'List files in the user working directory (or a subdirectory of it).',
-      parameters: {
-        type: 'object',
-        properties: { path: { type: 'string', description: 'Relative directory, default ".".' } },
-      },
+    name: 'list_files',
+    description: 'List files in the user working directory (or a subdirectory of it).',
+    parameters: {
+      type: 'object',
+      properties: { path: { type: 'string', description: 'Relative directory, default ".".' } },
     },
   },
   {
     type: 'function' as const,
-    function: {
-      name: 'update_plan',
-      description:
-        'Publish or revise your plan for a multi-step task so the user can follow along. ' +
-        'You decide the steps and when each is done; revise freely as you learn. ' +
-        'Skip it for anything you can answer in one or two tool calls.',
-      parameters: {
-        type: 'object',
-        properties: {
+    name: 'update_plan',
+    description:
+      'Publish or revise your plan for a multi-step task so the user can follow along. ' +
+      'You decide the steps and when each is done; revise freely as you learn. ' +
+      'Skip it for anything you can answer in one or two tool calls.',
+    parameters: {
+      type: 'object',
+      properties: {
+        items: {
+          type: 'array',
+          description: 'Ordered steps.',
           items: {
-            type: 'array',
-            description: 'Ordered steps.',
-            items: {
-              type: 'object',
-              properties: {
-                title: { type: 'string' },
-                status: { type: 'string', enum: ['pending', 'running', 'done'] },
-              },
-              required: ['title'],
+            type: 'object',
+            properties: {
+              title: { type: 'string' },
+              status: { type: 'string', enum: ['pending', 'running', 'done'] },
             },
+            required: ['title'],
           },
         },
-        required: ['items'],
       },
+      required: ['items'],
     },
   },
 ];
 
 export const WORKSPACE_TOOL_NAMES = new Set(
-  WORKSPACE_TOOLS.map((t) => t.function.name),
+  WORKSPACE_TOOLS.map((t) => t.name),
 );

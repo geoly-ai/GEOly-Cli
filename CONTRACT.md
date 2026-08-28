@@ -79,9 +79,9 @@ what a non-rendering crawler sees, which is the useful lens for GEO. It refuses 
 loopback and link-local addresses (including cloud metadata), re-checks every redirect hop,
 and caps size and time. Nothing is proxied through GEOly, so it costs nothing.
 
-`web_search` is served by GEOly (a paid search API) and is exposed only to this CLI — other
-MCP clients bring their own web access. It is metered against your organization's quota, so
-prefer URLs you already have from GEOly data and search only when you need to find a page.
+Web search is the model's own: when it needs something it cannot get from GEOly data or a
+known URL, it searches and cites what it used. You will see it as a `web_search` step like any
+other tool. There is no separate search key or quota — the cost lands in the run's tokens.
 
 ## Memory
 

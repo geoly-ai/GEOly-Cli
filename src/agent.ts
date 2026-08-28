@@ -28,6 +28,7 @@ export interface AgentProfile {
 
 /** One assembled tool call from the model. */
 export interface ToolCall {
+  /** Responses `call_id` — what a function_call_output must be addressed to. */
   id: string;
   name: string;
   /** Raw JSON string as emitted by the model; parsed by the caller so it can report bad JSON. */
@@ -37,6 +38,8 @@ export interface ToolCall {
 export type CompletionChunk =
   | { type: 'text'; text: string }
   | { type: 'tool_calls'; calls: ToolCall[] }
+  /** The model ran its own web search (a server-side built-in, not one of our tools). */
+  | { type: 'web_search'; phase: 'start' | 'done' }
   | { type: 'finish'; reason: string; totalTokens: number };
 
 /** Same-origin sibling of the configured MCP endpoint (endpoint allowlist already applied). */
@@ -131,15 +134,21 @@ export async function fetchProfile(
 }
 
 /**
- * Stream one model step through the metered proxy.
+ * Stream one model step through the metered proxy (Responses API).
  *
- * Emits text as it arrives, then one `tool_calls` chunk once the model's calls
- * are fully assembled (streamed tool arguments arrive in fragments keyed by
- * index, so they cannot be acted on until the step finishes).
+ * Why Responses rather than chat completions: on our gateway it is the only path
+ * that carries the model's built-in web search and that reports `cached_tokens`
+ * at all — with chat completions, any request carrying tools reported zero cache
+ * hits. Both were measured, not assumed.
+ *
+ * The event stream is typed rather than positional: text arrives as
+ * `response.output_text.delta`, tool calls are assembled from
+ * `response.output_item.added` + `response.function_call_arguments.*`, and usage
+ * rides on the final `response.completed`.
  */
 export async function* streamCompletion(
   ctx: Ctx,
-  body: { messages: unknown[]; tools?: unknown[] },
+  body: { instructions?: string; input: unknown[]; tools?: unknown[] },
   signal?: AbortSignal,
 ): AsyncGenerator<CompletionChunk> {
   const controller = new AbortController();
@@ -157,8 +166,9 @@ export async function* streamCompletion(
 
     const decoder = new TextDecoder();
     let tail = '';
-    let finishReason = 'stop';
     let totalTokens = 0;
+    let finishReason = 'stop';
+    /** Assembled by output_index, because arguments stream in fragments. */
     const calls = new Map<number, ToolCall>();
 
     for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
@@ -172,43 +182,65 @@ export async function* streamCompletion(
         if (!trimmed.startsWith('data:')) continue;
         const payload = trimmed.slice(5).trim();
         if (!payload || payload === '[DONE]') continue;
-        let parsed: {
-          choices?: Array<{
-            delta?: {
-              content?: string;
-              tool_calls?: Array<{
-                index?: number;
-                id?: string;
-                function?: { name?: string; arguments?: string };
-              }>;
-            };
-            finish_reason?: string | null;
-          }>;
-          usage?: { total_tokens?: number };
-        };
+        let ev: ResponseEvent;
         try {
-          parsed = JSON.parse(payload);
+          ev = JSON.parse(payload) as ResponseEvent;
         } catch {
           continue; // heartbeat / comment line
         }
-        if (typeof parsed.usage?.total_tokens === 'number') totalTokens = parsed.usage.total_tokens;
-        const choice = parsed.choices?.[0];
-        if (!choice) continue;
-        if (choice.delta?.content) yield { type: 'text', text: choice.delta.content };
-        for (const delta of choice.delta?.tool_calls ?? []) {
-          const index = delta.index ?? 0;
-          const current = calls.get(index) ?? { id: '', name: '', arguments: '' };
-          if (delta.id) current.id = delta.id;
-          if (delta.function?.name) current.name += delta.function.name;
-          if (delta.function?.arguments) current.arguments += delta.function.arguments;
-          calls.set(index, current);
+
+        switch (ev.type) {
+          case 'response.output_text.delta':
+            if (ev.delta) yield { type: 'text', text: ev.delta };
+            break;
+          case 'response.output_item.added':
+            if (ev.item?.type === 'function_call') {
+              calls.set(ev.output_index ?? calls.size, {
+                id: ev.item.call_id ?? ev.item.id ?? '',
+                name: ev.item.name ?? '',
+                arguments: ev.item.arguments ?? '',
+              });
+            }
+            break;
+          case 'response.function_call_arguments.delta': {
+            const current = calls.get(ev.output_index ?? 0);
+            if (current && ev.delta) current.arguments += ev.delta;
+            break;
+          }
+          case 'response.function_call_arguments.done': {
+            const current = calls.get(ev.output_index ?? 0);
+            // done 携带完整参数：以它为准，避免分片拼接漏尾
+            if (current && typeof ev.arguments === 'string') current.arguments = ev.arguments;
+            break;
+          }
+          case 'response.web_search_call.in_progress':
+            yield { type: 'web_search', phase: 'start' };
+            break;
+          case 'response.web_search_call.completed':
+            yield { type: 'web_search', phase: 'done' };
+            break;
+          case 'response.completed':
+          case 'response.incomplete':
+            totalTokens = ev.response?.usage?.total_tokens ?? 0;
+            finishReason = ev.type === 'response.incomplete' ? 'incomplete' : 'stop';
+            break;
+          case 'response.failed':
+            throw new GeolyError(
+              'upstream_unavailable',
+              `Model run failed: ${ev.response?.error?.message ?? 'unknown error'}`,
+            );
+          default:
+            break;
         }
-        if (choice.finish_reason) finishReason = choice.finish_reason;
       }
     }
 
     if (calls.size > 0) {
-      yield { type: 'tool_calls', calls: [...calls.entries()].sort((a, b) => a[0] - b[0]).map(([, c]) => c) };
+      const assembled = [...calls.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([, c]) => c)
+        .filter((c) => c.name && c.id);
+      if (assembled.length > 0) yield { type: 'tool_calls', calls: assembled };
     }
     yield { type: 'finish', reason: finishReason, totalTokens };
   } catch (err) {
@@ -223,4 +255,14 @@ export async function* streamCompletion(
     clearTimeout(idle);
     signal?.removeEventListener('abort', onAbort);
   }
+}
+
+/** Only the event fields this client acts on; everything else is ignored by design. */
+interface ResponseEvent {
+  type: string;
+  delta?: string;
+  arguments?: string;
+  output_index?: number;
+  item?: { type?: string; id?: string; call_id?: string; name?: string; arguments?: string };
+  response?: { usage?: { total_tokens?: number }; error?: { message?: string } };
 }

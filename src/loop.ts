@@ -26,22 +26,20 @@ import { WORKSPACE_TOOLS, WORKSPACE_TOOL_NAMES, Workspace, type PlanItem, type W
 /** Client-side tool: the agent's own memory. Not an MCP tool — it writes to your disk. */
 const REMEMBER_TOOL = {
   type: 'function' as const,
-  function: {
-    name: 'remember',
-    description:
-      'Keep a short note for future sessions with this brand, or update/remove one. ' +
-      'Notes live in a local markdown file the user can edit. Same slug overwrites. ' +
-      'You decide what is worth keeping — durable facts, corrections the user made, ' +
-      'conclusions you would otherwise re-derive. Do not store transient query results.',
-    parameters: {
-      type: 'object',
-      properties: {
-        slug: { type: 'string', description: 'Short stable id, kebab-case, e.g. "main-competitors"' },
-        content: { type: 'string', description: 'The note itself. Omit when removing.' },
-        remove: { type: 'boolean', description: 'Delete the note with this slug.' },
-      },
-      required: ['slug'],
+  name: 'remember',
+  description:
+    'Keep a short note for future sessions with this brand, or update/remove one. ' +
+    'Notes live in a local markdown file the user can edit. Same slug overwrites. ' +
+    'You decide what is worth keeping — durable facts, corrections the user made, ' +
+    'conclusions you would otherwise re-derive. Do not store transient query results.',
+  parameters: {
+    type: 'object',
+    properties: {
+      slug: { type: 'string', description: 'Short stable id, kebab-case, e.g. "main-competitors"' },
+      content: { type: 'string', description: 'The note itself. Omit when removing.' },
+      remove: { type: 'boolean', description: 'Delete the note with this slug.' },
     },
+    required: ['slug'],
   },
 };
 
@@ -53,11 +51,20 @@ export type LoopEvent =
   | { type: 'tool'; phase: 'call' | 'result' | 'error'; name: string; message?: string; ms?: number }
   | { type: 'done'; steps: number; turnTokens: number; stopped: 'model' | 'budget' | 'interrupted' };
 
-export interface ChatMessage {
-  role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string | null;
-  tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>;
-  tool_call_id?: string;
+/**
+ * Responses 输入项。三种形态：
+ * - 对话消息 `{role, content}`（system 不在此列——它走 instructions）
+ * - 模型发起的调用 `{type:'function_call', call_id, name, arguments}`
+ * - 我们回灌的结果 `{type:'function_call_output', call_id, output}`
+ */
+export interface InputItem {
+  type?: 'function_call' | 'function_call_output';
+  role?: 'user' | 'assistant';
+  content?: string;
+  call_id?: string;
+  name?: string;
+  arguments?: string;
+  output?: string;
 }
 
 /**
@@ -92,11 +99,12 @@ function estimateTokens(value: unknown): number {
  * 撑爆上下文的场景（stub 实测：轮切法在单轮里永远压不了）。按块切才能在一轮内下刀，
  * 同时保证 tool_calls 与 tool 结果不被拆散——拆散会被上游直接拒绝。
  */
-function splitBlocks(messages: ChatMessage[]): ChatMessage[][] {
-  const blocks: ChatMessage[][] = [];
+function splitBlocks(messages: InputItem[]): InputItem[][] {
+  const blocks: InputItem[][] = [];
   for (const message of messages) {
     const last = blocks[blocks.length - 1];
-    if (message.role === 'tool' && last && last[0]?.role === 'assistant' && last[0].tool_calls) {
+    // function_call_output 必须紧跟它的 function_call，同块不可拆
+    if (message.type === 'function_call_output' && last && last[0]?.type === 'function_call') {
       last.push(message);
       continue;
     }
@@ -168,16 +176,16 @@ function digestToolResult(text: string): string {
 
 /** MCP tool descriptors → OpenAI function tools. Write tools are dropped: this CLI is read-only. */
 function toFunctionTools(tools: ToolInfo[]): unknown[] {
+  // Responses 的函数工具是**扁平**结构（name/description/parameters 直接在顶层），
+  // 不是 chat completions 的 { type:'function', function:{...} } 包装。
   return [
     ...tools
       .filter((t) => !WRITE_TOOLS.has(t.name))
       .map((t) => ({
         type: 'function',
-        function: {
-          name: t.name,
-          description: t.description ?? '',
-          parameters: t.inputSchema ?? { type: 'object', properties: {} },
-        },
+        name: t.name,
+        description: t.description ?? '',
+        parameters: t.inputSchema ?? { type: 'object', properties: {} },
       })),
     REMEMBER_TOOL,
     // harness：本地工具与 MCP 数据工具同处一个工具面，模型不需要知道谁在哪边执行。
@@ -212,15 +220,17 @@ export class AgentSession {
   /** 防止摘要套摘要：一次压缩进行中时不再触发新的压缩。 */
   private compacting = false;
   /** 每条 tool 消息产生于第几步（用 WeakMap，压缩重建数组后仍然认得同一批对象）。 */
-  private toolStep = new WeakMap<ChatMessage, number>();
-  private digested = new WeakSet<ChatMessage>();
+  private toolStep = new WeakMap<InputItem, number>();
+  private digested = new WeakSet<InputItem>();
 
   private constructor(
     private readonly ctx: Ctx,
     private readonly client: McpClient,
     readonly profile: AgentProfile,
+    /** 系统提示 + 记忆，走 Responses 的 instructions 而非输入项。 */
+    private readonly instructions: string,
     private readonly functionTools: unknown[],
-    private messages: ChatMessage[],
+    private messages: InputItem[],
     readonly id: string,
     readonly workspace: Workspace,
   ) {}
@@ -246,26 +256,19 @@ export class AgentSession {
       client.listTools(),
     ]);
 
-    // 系统提示每次都用**当前**的 profile + 记忆重建，不从 transcript 里恢复：
+    // 系统提示每次都用**当前**的 profile + 记忆重建，不从 transcript 恢复：
     // 续跑时用户可能刚手改过记忆文件，旧提示会把改动吞掉。transcript 只存对话。
-    const system: ChatMessage = {
-      role: 'system',
-      content: profile.system_prompt + memoryBlock(profile.brand.id),
-    };
+    // Responses 把它放在 instructions，不占输入项——顺带让压缩少一个特例。
+    const instructions = profile.system_prompt + memoryBlock(profile.brand.id);
     // 续跑目标只能在拿到 profile 之后才知道（品牌由服务端解析），所以 --continue
     // 不需要用户先说 --brand；找不到历史就静默开新会话，而不是让用户吃一个错误。
     const resumeId = opts.resume ? findLatestSession(profile.brand.id) : undefined;
-    let messages: ChatMessage[];
-    let id: string;
     const restored = resumeId ? loadTranscript(resumeId) : undefined;
-    if (resumeId && restored) {
-      messages = [system, ...restored.filter((m) => m.role !== 'system')];
-      id = resumeId;
-    } else {
-      messages = [system];
-      const stamp = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15);
-      id = `${stamp}-${profile.brand.id.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
-    }
+    const messages: InputItem[] = restored ?? [];
+    const id =
+      resumeId && restored
+        ? resumeId
+        : `${new Date().toISOString().replace(/[-:]/g, '').slice(0, 15)}-${profile.brand.id.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
 
     // 默认工作区=启动目录：agent 产出的东西落在用户此刻所在的地方，符合终端直觉。
     // 没给审批回调时一律拒绝写入（脚本场景必须显式 --allow-writes）。
@@ -273,7 +276,16 @@ export class AgentSession {
       opts.workspaceRoot ?? process.cwd(),
       opts.approveWrite ?? (async () => false),
     );
-    return new AgentSession(ctx, client, profile, toFunctionTools(tools), messages, id, workspace);
+    return new AgentSession(
+      ctx,
+      client,
+      profile,
+      instructions,
+      toFunctionTools(tools),
+      messages,
+      id,
+      workspace
+    );
   }
 
   /** Tool count as the model sees it (MCP read tools + the local `remember`). */
@@ -286,7 +298,11 @@ export class AgentSession {
    * 成分（72 个工具 ≈ 2 万 tokens），漏算它会让压缩迟迟不触发。
    */
   get estimatedTokens(): number {
-    return estimateTokens(this.functionTools) + estimateTokens(this.messages);
+    return (
+      estimateTokens(this.functionTools) +
+      estimateTokens(this.instructions) +
+      estimateTokens(this.messages)
+    );
   }
 
   /** Notes currently injected into this session's system prompt. */
@@ -335,7 +351,11 @@ export class AgentSession {
       let calls: ToolCall[] = [];
       for await (const chunk of streamCompletion(
         this.ctx,
-        { messages: this.messages, tools: this.functionTools },
+        {
+          instructions: this.instructions,
+          input: this.messages,
+          tools: this.functionTools,
+        },
         signal,
       )) {
         if (chunk.type === 'text') {
@@ -343,30 +363,43 @@ export class AgentSession {
           yield { type: 'text', text: chunk.text };
         } else if (chunk.type === 'tool_calls') {
           calls = chunk.calls;
+        } else if (chunk.type === 'web_search') {
+          // 模型自带的联网检索：对用户来说和别的工具没区别，用同一种呈现。
+          yield {
+            type: 'tool',
+            phase: chunk.phase === 'start' ? 'call' : 'result',
+            name: 'web_search',
+          };
         } else if (chunk.type === 'finish') {
           turnTokens += chunk.totalTokens;
         }
       }
 
       if (calls.length === 0) {
-        const answer: ChatMessage = { role: 'assistant', content: assistantText.join('') };
+        const answer: InputItem = { role: 'assistant', content: assistantText.join('') };
         this.messages.push(answer);
         this.append(answer);
         yield { type: 'done', steps: step, turnTokens, stopped: 'model' };
         return;
       }
 
-      const assistant: ChatMessage = {
-        role: 'assistant',
-        content: assistantText.join('') || null,
-        tool_calls: calls.map((c) => ({
-          id: c.id,
-          type: 'function' as const,
-          function: { name: c.name, arguments: c.arguments },
-        })),
-      };
-      this.messages.push(assistant);
-      this.append(assistant);
+      // Responses：助手正文与每个调用是**各自独立的输入项**，不是一条消息里挂 tool_calls。
+      const text = assistantText.join('');
+      if (text) {
+        const said: InputItem = { role: 'assistant', content: text };
+        this.messages.push(said);
+        this.append(said);
+      }
+      for (const call of calls) {
+        const item: InputItem = {
+          type: 'function_call',
+          call_id: call.id,
+          name: call.name,
+          arguments: call.arguments,
+        };
+        this.messages.push(item);
+        this.append(item);
+      }
 
       // Calls within one step are independent — run them together, report in order.
       for (const call of calls) yield { type: 'tool', phase: 'call', name: call.name };
@@ -382,7 +415,11 @@ export class AgentSession {
         if (call.name === 'update_plan' && !result.failed) {
           yield { type: 'plan', items: this.workspace.currentPlan };
         }
-        const toolMessage: ChatMessage = { role: 'tool', tool_call_id: call.id, content: result.text };
+        const toolMessage: InputItem = {
+          type: 'function_call_output',
+          call_id: call.id,
+          output: result.text,
+        };
         this.toolStep.set(toolMessage, step);
         this.messages.push(toolMessage);
         this.append(toolMessage); // transcript 保留原文，降级只影响发给模型的副本
@@ -400,10 +437,10 @@ export class AgentSession {
    */
   private demoteStaleResults(currentStep: number): void {
     for (const message of this.messages) {
-      if (message.role !== 'tool' || this.digested.has(message)) continue;
+      if (message.type !== 'function_call_output' || this.digested.has(message)) continue;
       const born = this.toolStep.get(message);
       if (born === undefined || currentStep - born <= KEEP_FULL_RESULT_STEPS) continue;
-      const text = message.content ?? '';
+      const text = message.output ?? '';
       const digest = digestToolResult(text);
       if (digest.length >= text.length) {
         this.digested.add(message);
@@ -429,8 +466,8 @@ export class AgentSession {
     const before = this.estimatedTokens;
     if (before <= threshold) return undefined;
 
-    const [system, ...rest] = this.messages;
-    const blocks = splitBlocks(rest);
+    // 输入项里已经没有系统提示（它在 instructions），全部参与切块，不再有前缀特例。
+    const blocks = splitBlocks(this.messages);
 
     // 必须留下的：当前正在回答的问题（否则模型忘了自己在干什么）+ 最近若干块（刚查到的
     // 事实原文）。其余按原顺序压成一段摘要 —— 注意问题块常常是第 0 块，所以「保留集」
@@ -456,7 +493,8 @@ export class AgentSession {
       keep = buildKeep(recent);
       const keptTokens =
         estimateTokens(this.functionTools) +
-        estimateTokens([...(system ? [system] : []), ...blocks.filter((_, i) => keep.has(i)).flat()]);
+        estimateTokens(this.instructions) +
+        estimateTokens(blocks.filter((_, i) => keep.has(i)).flat());
       if (keptTokens <= target) break;
     }
     const staleIndexes = blocks.map((_, i) => i).filter((i) => !keep.has(i));
@@ -472,10 +510,8 @@ export class AgentSession {
       for await (const chunk of streamCompletion(
         this.ctx,
         {
-          messages: [
-            { role: 'system', content: COMPACT_INSTRUCTION },
-            { role: 'user', content: JSON.stringify(stale) },
-          ],
+          instructions: COMPACT_INSTRUCTION,
+          input: [{ role: 'user', content: JSON.stringify(stale) }],
         },
         signal,
       )) {
@@ -489,12 +525,12 @@ export class AgentSession {
     this.compacting = false;
     if (!summary.trim()) return undefined;
 
-    const digest: ChatMessage = {
+    const digest: InputItem = {
       role: 'user',
       content: `[Earlier conversation, compacted]\n${summary.trim()}`,
     };
     // 摘要插在第一块被丢弃的位置上，保持「问题 → 早期工作摘要 → 最近工作」的时间顺序。
-    const rebuilt: ChatMessage[] = system ? [system] : [];
+    const rebuilt: InputItem[] = [];
     blocks.forEach((block, i) => {
       if (i === firstStale) rebuilt.push(digest);
       if (keep.has(i)) rebuilt.push(...block);
@@ -555,7 +591,7 @@ export class AgentSession {
   }
 
   /** Append one message to the transcript. Persistence must never break a run. */
-  private append(message: ChatMessage): void {
+  private append(message: InputItem): void {
     try {
       ensureDir();
       const file = transcriptPath(this.id);
@@ -568,18 +604,18 @@ export class AgentSession {
 }
 
 /** Read a transcript back into messages. Corrupt lines are skipped, not fatal. */
-function loadTranscript(id: string): ChatMessage[] | undefined {
+function loadTranscript(id: string): InputItem[] | undefined {
   let raw: string;
   try {
     raw = fs.readFileSync(transcriptPath(id), 'utf8');
   } catch {
     return undefined;
   }
-  const messages: ChatMessage[] = [];
+  const messages: InputItem[] = [];
   for (const line of raw.split(/\r?\n/)) {
     if (!line.trim()) continue;
     try {
-      messages.push(JSON.parse(line) as ChatMessage);
+      messages.push(JSON.parse(line) as InputItem);
     } catch {
       // skip
     }
