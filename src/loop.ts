@@ -121,6 +121,48 @@ function serializeResult(value: unknown): string {
   return `${text.slice(0, MAX_TOOL_RESULT_CHARS)}\n…[truncated ${text.length - MAX_TOOL_RESULT_CHARS} chars]`;
 }
 
+/**
+ * 工具结果的「降级」：完整结果只在它落地后的这么多步里保持原文，之后换成确定性摘要。
+ *
+ * 一条结果最多 24k 字符（约 6k tokens），一旦进了历史，**后面每一步都要重发一次**。
+ * 用模型压缩要额外花一次调用，而且不可预测；这里的降级是纯本地、确定性的：留住形状
+ * （行数、前几行、标量字段），丢掉长尾。模型真需要细节时可以重新调那个工具。
+ */
+const KEEP_FULL_RESULT_STEPS = 2;
+const DIGEST_MAX_CHARS = 900;
+const DIGEST_SAMPLE_ROWS = 3;
+const DIGEST_PREFIX = '[abbreviated earlier tool result]';
+
+/** 数组 → 前几项 + 总数；对象 → 保留标量、数组字段折叠。非 JSON → 截断并标注原长。 */
+function digestToolResult(text: string): string {
+  if (text.length <= DIGEST_MAX_CHARS) return text;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return `${DIGEST_PREFIX} ${text.slice(0, DIGEST_MAX_CHARS)}… (${text.length} chars total)`;
+  }
+
+  const fold = (value: unknown): unknown => {
+    if (Array.isArray(value)) {
+      const head = value.slice(0, DIGEST_SAMPLE_ROWS).map(fold);
+      return value.length > DIGEST_SAMPLE_ROWS
+        ? { sample: head, omitted: value.length - DIGEST_SAMPLE_ROWS, total: value.length }
+        : head;
+    }
+    if (value && typeof value === 'object') {
+      const out: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = fold(v);
+      return out;
+    }
+    return value;
+  };
+
+  let folded = JSON.stringify(fold(parsed));
+  if (folded.length > DIGEST_MAX_CHARS) folded = `${folded.slice(0, DIGEST_MAX_CHARS)}…`;
+  return `${DIGEST_PREFIX} ${folded}`;
+}
+
 /** MCP tool descriptors → OpenAI function tools. Write tools are dropped: this CLI is read-only. */
 function toFunctionTools(tools: ToolInfo[]): unknown[] {
   return [
@@ -161,6 +203,9 @@ export function findLatestSession(brandId: string): string | undefined {
 export class AgentSession {
   /** 防止摘要套摘要：一次压缩进行中时不再触发新的压缩。 */
   private compacting = false;
+  /** 每条 tool 消息产生于第几步（用 WeakMap，压缩重建数组后仍然认得同一批对象）。 */
+  private toolStep = new WeakMap<ChatMessage, number>();
+  private digested = new WeakSet<ChatMessage>();
 
   private constructor(
     private readonly ctx: Ctx,
@@ -259,6 +304,8 @@ export class AgentSession {
         return;
       }
       step += 1;
+      // 先做零成本的本地降级，再判断要不要花钱压缩——很多时候降级就够了。
+      this.demoteStaleResults(step);
       const compacted = await this.compactIfNeeded(signal);
       if (compacted) yield compacted;
       yield { type: 'step', n: step };
@@ -312,12 +359,35 @@ export class AgentSession {
           ? { type: 'tool', phase: 'error', name: call.name, message: result.text.slice(0, 200), ms }
           : { type: 'tool', phase: 'result', name: call.name, ms };
         const toolMessage: ChatMessage = { role: 'tool', tool_call_id: call.id, content: result.text };
+        this.toolStep.set(toolMessage, step);
         this.messages.push(toolMessage);
-        this.append(toolMessage);
+        this.append(toolMessage); // transcript 保留原文，降级只影响发给模型的副本
       }
     }
 
     yield { type: 'done', steps: step, turnTokens, stopped: 'budget' };
+  }
+
+  /**
+   * 把「已经过了保鲜期」的工具结果就地换成摘要。
+   *
+   * 零成本、确定性、不改消息结构（tool_call_id 原样保留，配对不受影响）；
+   * 落盘的 transcript 仍是原文，只有发给模型的副本被瘦身。
+   */
+  private demoteStaleResults(currentStep: number): void {
+    for (const message of this.messages) {
+      if (message.role !== 'tool' || this.digested.has(message)) continue;
+      const born = this.toolStep.get(message);
+      if (born === undefined || currentStep - born <= KEEP_FULL_RESULT_STEPS) continue;
+      const text = message.content ?? '';
+      const digest = digestToolResult(text);
+      if (digest.length >= text.length) {
+        this.digested.add(message);
+        continue;
+      }
+      message.content = digest;
+      this.digested.add(message);
+    }
   }
 
   /**
