@@ -38,20 +38,25 @@ geoly completions <shell>
   exits. `--continue` resumes the most recent session for the resolved brand. Piped stdin
   (`echo "..." | geoly`) answers once and exits. Transcripts are written to
   `~/.geoly/sessions/<id>.jsonl`.
-- `geoly ask` is the same agent, non-interactive, for scripts.
-- **Context is managed locally.** When a session's estimated context passes the server-set
-  threshold, the CLI summarizes the older part of the conversation and continues with the
-  summary plus the recent work (`⤳ compacted …` on stderr). The current question and the
-  most recent tool results are always kept verbatim, and tool calls are never split from
-  their results. The summary itself costs one metered model call. The loop runs **in this process**: it fetches the
-  system prompt and step budget from the server, lists your tools over MCP, and then drives
-  the model — picking tools, running them, feeding results back — until it can answer.
-  Inference is hosted and metered on your organization's plan; the loop, the transcript and
-  the memory file stay on your machine. `--output raw` streams the answer to stdout as it
-  arrives; the default `--output json` prints one envelope (`text`, `tools`, `steps`,
-  `usage`, `brand`, `model`) at the end. Step/tool progress and the usage summary go to
-  stderr (`-q` silences them). Requires an active subscription (402 →
+- `geoly ask` is the same agent, non-interactive, for scripts. The loop runs **in this
+  process**: it fetches the system prompt and step budget from the server, lists your tools
+  over MCP, and then drives the model — picking tools, running them, feeding results back —
+  until it can answer. Inference is hosted and metered on your organization's plan; the loop,
+  the transcript and the memory file stay on your machine. `--output raw` streams the answer
+  to stdout as it arrives; the default `--output json` prints one envelope (`text`, `tools`,
+  `steps`, `usage`, `brand`, `model`) at the end. Step/tool progress and the usage summary go
+  to stderr (`-q` silences them). Requires an active subscription (402 →
   `subscription_required`); a per-organization daily model budget returns 429.
+- **Context is managed locally**, in two layers:
+  1. *Older tool results are abbreviated in place* after a couple of steps — a large result
+     becomes a deterministic digest (shape, sample rows, totals) instead of being re-sent in
+     full on every later step. Costs nothing, needs no model call. Your transcript on disk
+     keeps the full text; only the copy sent to the model is shortened, and the agent can
+     re-run the tool if it needs the detail back.
+  2. *Past the server-set threshold, the conversation is summarized* (`⤳ compacted …` on
+     stderr). The current question and the most recent work are always kept verbatim, and
+     tool calls are never split from their results. This one costs a metered model call, so
+     it only runs when layer 1 was not enough.
 
 ## Memory
 
