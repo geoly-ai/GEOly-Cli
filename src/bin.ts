@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /** GEOly CLI entry point — registers the stable v0 command set. */
 import { Builtins, Cli } from 'clipanion';
+import { AskCommand } from './commands/ask.js';
 import { AuthLoginCommand, AuthLogoutCommand, AuthStatusCommand } from './commands/auth.js';
 import { CallCommand } from './commands/call.js';
 import { CompletionsCommand } from './commands/completions.js';
@@ -27,6 +28,7 @@ cli.register(WhoamiCommand);
 cli.register(ToolsCommand);
 cli.register(SchemaCommand);
 cli.register(CallCommand);
+cli.register(AskCommand);
 cli.register(UpgradeCommand);
 cli.register(CompletionsCommand);
 cli.register(Builtins.HelpCommand);

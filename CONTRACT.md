@@ -21,6 +21,7 @@ geoly whoami
 geoly tools [--json] [--refresh]
 geoly schema <tool>
 geoly call <tool> [--<param> <value> ...] [--input -] [--data '<json>']
+geoly ask "<question>" [--brand <id>] [--locale zh|en]
 geoly upgrade
 geoly completions <shell>
 ```
@@ -30,6 +31,12 @@ geoly completions <shell>
   presence-based. Arrays/objects take JSON strings. `--data '<json>'` passes the whole
   argument object; `--input -` reads it from stdin. Individual flags override same-name
   fields from `--data`/`--input`.
+- `geoly ask` is the agent entry point: the question goes to the hosted GEO agent, which
+  picks and runs tools itself over the same surface and answers. It streams — `--output raw`
+  writes the answer to stdout as it arrives; the default `--output json` prints one envelope
+  (`text`, `tools`, `usage`, `brand`, `model`) at the end. Tool activity and the usage
+  summary go to stderr (`-q` silences them). Hosted inference requires an active
+  subscription (exit code for `subscription_required` on 402).
 
 ## Authentication
 
