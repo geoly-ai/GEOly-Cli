@@ -15,6 +15,7 @@ change without notice.
 
 ```
 geoly                       [--brand <id>] [--locale zh|en] [--continue]
+                            [--workspace <dir>] [--allow-writes]
 geoly auth login [--profile <name>] [--no-browser]
 geoly auth status
 geoly auth logout
@@ -57,6 +58,19 @@ geoly completions <shell>
      stderr). The current question and the most recent work are always kept verbatim, and
      tool calls are never split from their results. This one costs a metered model call, so
      it only runs when layer 1 was not enough.
+
+## Workspace
+
+The agent can produce things, not just answer. `write_file` / `read_file` / `list_files`
+operate inside one directory — the one you launched from, or `--workspace <dir>` — and paths
+that resolve outside it are refused. Writes need your approval: in a session you are asked
+once per file (`a` allows the rest of the session); with piped stdin or `geoly ask` nothing is
+written unless you pass `--allow-writes`. Reads inside the workspace are allowed without
+asking. Putting long output in a file also keeps it out of the model's context: the tool
+result is "wrote 42KB", not the 42KB.
+
+`update_plan` lets the agent publish a checklist for multi-step work, rendered as it changes.
+The agent decides the steps and when they are done; the CLI only displays them.
 
 ## Memory
 

@@ -15,6 +15,7 @@ import { Ctx } from '../context.js';
 import { GeolyError, asGeolyError } from '../errors.js';
 import { AgentSession } from '../loop.js';
 import { memoryPath, readNotes } from '../memory.js';
+import type { WriteApproval } from '../workspace.js';
 import { reportError } from '../output.js';
 import { Spinner, formatTokens, line, style, styleLine } from '../ui.js';
 import { GeolyCommand } from './base.js';
@@ -49,6 +50,12 @@ export class ChatCommand extends GeolyCommand {
   continueSession = Option.Boolean('--continue,-c', false, {
     description: 'Resume the most recent session for this brand',
   });
+  allowWrites = Option.Boolean('--allow-writes', false, {
+    description: 'Approve file writes up front (required when stdin is piped)',
+  });
+  workspace = Option.String('--workspace', {
+    description: 'Directory the agent may read and write (default: current directory)',
+  });
 
   protected async run(ctx: Ctx): Promise<number> {
     if (this.locale && this.locale !== 'zh' && this.locale !== 'en') {
@@ -60,11 +67,19 @@ export class ChatCommand extends GeolyCommand {
     if (!process.stdin.isTTY) {
       const piped = await readAll();
       if (!piped.trim()) throw new GeolyError('usage_error', 'No question on stdin');
-      const session = await AgentSession.create(ctx, { brandId: this.brand, locale });
+      const session = await AgentSession.create(ctx, {
+        brandId: this.brand,
+        locale,
+        workspaceRoot: this.workspace,
+        // 非交互场景问不了人：要么事先授权，要么一律拒绝。
+        approveWrite: async () => this.allowWrites,
+      });
       await this.runTurn(ctx, session, piped.trim());
       return 0;
     }
 
+    // 写入审批需要 readline，而 readline 又要在会话建好后才开；用一个可后填的钩子解耦。
+    let askApproval: WriteApproval = async () => this.allowWrites;
     const spinner = new Spinner();
     spinner.start('connecting');
     let session: AgentSession;
@@ -73,6 +88,8 @@ export class ChatCommand extends GeolyCommand {
         brandId: this.brand,
         locale,
         resume: this.continueSession,
+        workspaceRoot: this.workspace,
+        approveWrite: (p, bytes) => askApproval(p, bytes),
       });
     } finally {
       spinner.stop();
@@ -86,6 +103,23 @@ export class ChatCommand extends GeolyCommand {
       prompt: style.cyan(PROMPT),
       historySize: 200,
     });
+
+    // 一次会话里只问一次「以后都允许」：既不让人反复按 y，也不默认放行。
+    let alwaysAllow = this.allowWrites;
+    askApproval = async (relativePath, bytes) => {
+      if (alwaysAllow) return true;
+      const answer = (
+        await prompt(
+          rl,
+          `  ${style.yellow('write')} ${relativePath} (${bytes} bytes) — allow? [y/N/a=always] `,
+        )
+      )?.trim().toLowerCase();
+      if (answer === 'a' || answer === 'always') {
+        alwaysAllow = true;
+        return true;
+      }
+      return answer === 'y' || answer === 'yes';
+    };
 
     let running: AbortController | undefined;
     let lastSigint = 0;
@@ -142,6 +176,7 @@ export class ChatCommand extends GeolyCommand {
           (notes > 0 ? ` · ${notes} memory note${notes === 1 ? '' : 's'}` : ''),
       )}`,
     );
+    line(`  ${style.dim(`workspace ${session.workspace.root}`)}`);
     line(`  ${style.dim('/help for commands · Ctrl-C interrupts · Ctrl-D exits')}`);
     line();
   }
@@ -214,6 +249,22 @@ export class ChatCommand extends GeolyCommand {
         case 'step':
           if (!quiet && !wroteText) spinner.update(`thinking · step ${event.n}`);
           break;
+        case 'plan': {
+          if (quiet) break;
+          flushPending();
+          spinner.stop();
+          for (const item of event.items) {
+            const mark =
+              item.status === 'done'
+                ? style.green('✔')
+                : item.status === 'running'
+                  ? style.cyan('▸')
+                  : style.dim('◻');
+            line(`  ${mark} ${item.status === 'done' ? style.dim(item.title) : item.title}`);
+          }
+          spinner.start('thinking');
+          break;
+        }
         case 'compact':
           if (quiet) break;
           spinner.stop();
@@ -280,9 +331,9 @@ export class ChatCommand extends GeolyCommand {
 }
 
 /** One line of input; undefined on Ctrl-D. */
-function prompt(rl: readline.Interface): Promise<string | undefined> {
+function prompt(rl: readline.Interface, label = style.cyan(PROMPT)): Promise<string | undefined> {
   return new Promise((resolve) => {
-    rl.question(style.cyan(PROMPT), (answer) => resolve(answer));
+    rl.question(label, (answer) => resolve(answer));
     rl.once('close', () => resolve(undefined));
   });
 }

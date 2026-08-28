@@ -31,6 +31,12 @@ export class AskCommand extends GeolyCommand {
   question = Option.String({ required: true });
   brand = Option.String('--brand', { description: 'Brand id to bind this run to (defaults to the token brand)' });
   locale = Option.String('--locale', { description: 'Answer language: zh | en' });
+  allowWrites = Option.Boolean('--allow-writes', false, {
+    description: 'Let the agent write files into the workspace',
+  });
+  workspace = Option.String('--workspace', {
+    description: 'Directory the agent may read and write (default: current directory)',
+  });
 
   protected async run(ctx: Ctx): Promise<number> {
     const question = this.question.trim();
@@ -47,6 +53,9 @@ export class AskCommand extends GeolyCommand {
     const session = await AgentSession.create(ctx, {
       brandId: this.brand,
       locale: this.locale as 'zh' | 'en' | undefined,
+      workspaceRoot: this.workspace,
+      // 脚本里没人可问：只有显式 --allow-writes 才放行。
+      approveWrite: async () => this.allowWrites,
     });
     status(
       ctx,
@@ -74,6 +83,11 @@ export class AskCommand extends GeolyCommand {
           done = event;
           break;
         case 'step':
+          break;
+        case 'plan':
+          for (const item of event.items) {
+            status(ctx, `· [${item.status}] ${item.title}`);
+          }
           break;
         case 'compact':
           status(

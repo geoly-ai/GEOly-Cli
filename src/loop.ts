@@ -20,6 +20,7 @@ import { Ctx } from './context.js';
 import { GeolyError } from './errors.js';
 import { McpClient, ToolInfo, WRITE_TOOLS, unwrapToolResult } from './mcp.js';
 import { applyRemember, memoryBlock, readNotes } from './memory.js';
+import { WORKSPACE_TOOLS, WORKSPACE_TOOL_NAMES, Workspace, type PlanItem, type WriteApproval } from './workspace.js';
 
 /** Client-side tool: the agent's own memory. Not an MCP tool — it writes to your disk. */
 const REMEMBER_TOOL = {
@@ -46,6 +47,7 @@ const REMEMBER_TOOL = {
 export type LoopEvent =
   | { type: 'step'; n: number }
   | { type: 'compact'; droppedMessages: number; beforeTokens: number; afterTokens: number }
+  | { type: 'plan'; items: PlanItem[] }
   | { type: 'text'; text: string }
   | { type: 'tool'; phase: 'call' | 'result' | 'error'; name: string; message?: string; ms?: number }
   | { type: 'done'; steps: number; turnTokens: number; stopped: 'model' | 'budget' | 'interrupted' };
@@ -177,6 +179,8 @@ function toFunctionTools(tools: ToolInfo[]): unknown[] {
         },
       })),
     REMEMBER_TOOL,
+    // harness：本地工具与 MCP 数据工具同处一个工具面，模型不需要知道谁在哪边执行。
+    ...WORKSPACE_TOOLS,
   ];
 }
 
@@ -214,6 +218,7 @@ export class AgentSession {
     private readonly functionTools: unknown[],
     private messages: ChatMessage[],
     readonly id: string,
+    readonly workspace: Workspace,
   ) {}
 
   /**
@@ -223,7 +228,13 @@ export class AgentSession {
    */
   static async create(
     ctx: Ctx,
-    opts: { brandId?: string; locale?: 'zh' | 'en'; resume?: boolean } = {},
+    opts: {
+      brandId?: string;
+      locale?: 'zh' | 'en';
+      resume?: boolean;
+      workspaceRoot?: string;
+      approveWrite?: WriteApproval;
+    } = {},
   ): Promise<AgentSession> {
     const client = new McpClient(ctx);
     const [profile, tools] = await Promise.all([
@@ -252,7 +263,13 @@ export class AgentSession {
       id = `${stamp}-${profile.brand.id.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
     }
 
-    return new AgentSession(ctx, client, profile, toFunctionTools(tools), messages, id);
+    // 默认工作区=启动目录：agent 产出的东西落在用户此刻所在的地方，符合终端直觉。
+    // 没给审批回调时一律拒绝写入（脚本场景必须显式 --allow-writes）。
+    const workspace = new Workspace(
+      opts.workspaceRoot ?? process.cwd(),
+      opts.approveWrite ?? (async () => false),
+    );
+    return new AgentSession(ctx, client, profile, toFunctionTools(tools), messages, id, workspace);
   }
 
   /** Tool count as the model sees it (MCP read tools + the local `remember`). */
@@ -358,6 +375,9 @@ export class AgentSession {
         yield result.failed
           ? { type: 'tool', phase: 'error', name: call.name, message: result.text.slice(0, 200), ms }
           : { type: 'tool', phase: 'result', name: call.name, ms };
+        if (call.name === 'update_plan' && !result.failed) {
+          yield { type: 'plan', items: this.workspace.currentPlan };
+        }
         const toolMessage: ChatMessage = { role: 'tool', tool_call_id: call.id, content: result.text };
         this.toolStep.set(toolMessage, step);
         this.messages.push(toolMessage);
@@ -496,6 +516,18 @@ export class AgentSession {
       args = call.arguments.trim() ? (JSON.parse(call.arguments) as Record<string, unknown>) : {};
     } catch {
       return { text: `error: arguments were not valid JSON: ${call.arguments.slice(0, 200)}`, failed: true };
+    }
+    if (WORKSPACE_TOOL_NAMES.has(call.name)) {
+      switch (call.name) {
+        case 'write_file':
+          return { text: await this.workspace.write(args), failed: false };
+        case 'read_file':
+          return { text: this.workspace.read(args), failed: false };
+        case 'list_files':
+          return { text: this.workspace.list(args), failed: false };
+        default:
+          return { text: this.workspace.updatePlan(args), failed: false };
+      }
     }
     if (call.name === 'remember') {
       return {
