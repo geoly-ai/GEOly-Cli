@@ -59,7 +59,8 @@ export class AskCommand extends GeolyCommand {
     });
     status(
       ctx,
-      `· ${session.profile.brand.name} · ${session.profile.model} · ${session.toolCount} tools` +
+      `· ${session.profile.brand.name} · ${session.profile.model} · ` +
+        `${session.toolCount} tools (${session.catalogSize} available)` +
         (session.memoryCount > 0
           ? ` · ${session.memoryCount} memory note${session.memoryCount === 1 ? '' : 's'}`
           : ''),

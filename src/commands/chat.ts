@@ -172,7 +172,8 @@ export class ChatCommand extends GeolyCommand {
     line(`  ${style.bold('GEOly')} ${style.dim('— GEO agent')}`);
     line(
       `  ${style.dim(
-        `${session.profile.brand.name} · ${session.profile.model} · ${session.toolCount} tools` +
+        `${session.profile.brand.name} · ${session.profile.model} · ` +
+          `${session.toolCount} tools (${session.catalogSize} available)` +
           (notes > 0 ? ` · ${notes} memory note${notes === 1 ? '' : 's'}` : ''),
       )}`,
     );
@@ -193,7 +194,11 @@ export class ChatCommand extends GeolyCommand {
         line(style.dim('  new conversation'));
         return false;
       case 'tools':
-        line(style.dim(`  ${session.toolCount} tools (read-only surface + remember)`));
+        line(
+          style.dim(
+            `  ${session.toolCount} loaded · ${session.catalogSize} GEOly tools reachable via find_tools`,
+          ),
+        );
         return false;
       case 'memory': {
         if (rest[0] === 'edit') {

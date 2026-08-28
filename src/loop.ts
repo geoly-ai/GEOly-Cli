@@ -21,6 +21,14 @@ import { GeolyError } from './errors.js';
 import { McpClient, ToolInfo, WRITE_TOOLS, unwrapToolResult } from './mcp.js';
 import { FETCH_TOOL, fetchPage } from './fetcher.js';
 import { applyRemember, memoryBlock, readNotes } from './memory.js';
+import {
+  CORE_TOOL_NAMES,
+  type CatalogEntry,
+  FIND_TOOLS_TOOL,
+  TOOL_LOAD_LIMIT,
+  canLoadMore,
+  searchCatalog,
+} from './tool-catalog.js';
 import { WORKSPACE_TOOLS, WORKSPACE_TOOL_NAMES, Workspace, type PlanItem, type WriteApproval } from './workspace.js';
 
 /** Client-side tool: the agent's own memory. Not an MCP tool — it writes to your disk. */
@@ -47,6 +55,7 @@ export type LoopEvent =
   | { type: 'step'; n: number }
   | { type: 'compact'; droppedMessages: number; beforeTokens: number; afterTokens: number }
   | { type: 'plan'; items: PlanItem[] }
+  | { type: 'tools_loaded'; names: string[] }
   | { type: 'text'; text: string }
   | { type: 'tool'; phase: 'call' | 'result' | 'error'; name: string; message?: string; ms?: number }
   | { type: 'done'; steps: number; turnTokens: number; stopped: 'model' | 'budget' | 'interrupted' };
@@ -175,18 +184,24 @@ function digestToolResult(text: string): string {
 }
 
 /** MCP tool descriptors → OpenAI function tools. Write tools are dropped: this CLI is read-only. */
-function toFunctionTools(tools: ToolInfo[]): unknown[] {
+/**
+ * 装配这一步要发给模型的工具面：本地工具 + `find_tools` + **当前激活的** MCP 工具。
+ *
+ * 不再全量下发（见 tool-catalog.ts）：常驻集由真实用量决定，其余按需搜出来。
+ */
+function toFunctionTools(tools: ToolInfo[], active: Set<string>): unknown[] {
   // Responses 的函数工具是**扁平**结构（name/description/parameters 直接在顶层），
   // 不是 chat completions 的 { type:'function', function:{...} } 包装。
   return [
     ...tools
-      .filter((t) => !WRITE_TOOLS.has(t.name))
+      .filter((t) => !WRITE_TOOLS.has(t.name) && active.has(t.name))
       .map((t) => ({
         type: 'function',
         name: t.name,
         description: t.description ?? '',
         parameters: t.inputSchema ?? { type: 'object', properties: {} },
       })),
+    FIND_TOOLS_TOOL,
     REMEMBER_TOOL,
     // harness：本地工具与 MCP 数据工具同处一个工具面，模型不需要知道谁在哪边执行。
     ...WORKSPACE_TOOLS,
@@ -222,6 +237,10 @@ export class AgentSession {
   /** 每条 tool 消息产生于第几步（用 WeakMap，压缩重建数组后仍然认得同一批对象）。 */
   private toolStep = new WeakMap<InputItem, number>();
   private digested = new WeakSet<InputItem>();
+  /** 本会话额外装载的 MCP 工具数（受 TOOL_LOAD_LIMIT 约束）。 */
+  private loadedCount = 0;
+  /** 最近一次 find_tools 命中的名字，供 UI 呈现。 */
+  private lastLoaded: string[] = [];
 
   private constructor(
     private readonly ctx: Ctx,
@@ -229,7 +248,10 @@ export class AgentSession {
     readonly profile: AgentProfile,
     /** 系统提示 + 记忆，走 Responses 的 instructions 而非输入项。 */
     private readonly instructions: string,
-    private readonly functionTools: unknown[],
+    /** MCP 侧全部可用工具（含未激活的），供 find_tools 检索。 */
+    private readonly catalog: ToolInfo[],
+    /** 当前激活的 MCP 工具名——决定这一步发给模型的工具面。 */
+    private readonly active: Set<string>,
     private messages: InputItem[],
     readonly id: string,
     readonly workspace: Workspace,
@@ -281,16 +303,29 @@ export class AgentSession {
       client,
       profile,
       instructions,
-      toFunctionTools(tools),
+      tools.filter((t) => !WRITE_TOOLS.has(t.name)),
+      new Set(
+        tools.filter((t) => CORE_TOOL_NAMES.has(t.name)).map((t) => t.name)
+      ),
       messages,
       id,
       workspace
     );
   }
 
-  /** Tool count as the model sees it (MCP read tools + the local `remember`). */
+  /** 这一步实际发给模型的工具面（本地工具 + find_tools + 已激活的 MCP 工具）。 */
+  private get functionTools(): unknown[] {
+    return toFunctionTools(this.catalog, this.active);
+  }
+
+  /** Tool count as the model sees it. */
   get toolCount(): number {
     return this.functionTools.length;
+  }
+
+  /** MCP 侧总共有多少工具可达（含尚未激活的）。 */
+  get catalogSize(): number {
+    return this.catalog.length;
   }
 
   /**
@@ -414,6 +449,10 @@ export class AgentSession {
           : { type: 'tool', phase: 'result', name: call.name, ms };
         if (call.name === 'update_plan' && !result.failed) {
           yield { type: 'plan', items: this.workspace.currentPlan };
+        }
+        if (call.name === 'find_tools' && this.lastLoaded.length > 0) {
+          yield { type: 'tools_loaded', names: this.lastLoaded };
+          this.lastLoaded = [];
         }
         const toolMessage: InputItem = {
           type: 'function_call_output',
@@ -546,6 +585,37 @@ export class AgentSession {
   }
 
   /**
+   * 按需把工具装进工具面。
+   *
+   * 命中即激活——不做「先看再单独加载」的两段式：那要多一个回合，而模型搜之前就已经
+   * 知道自己想干什么了。返回值只给名字与一句话描述，完整 schema 由下一步的工具面承载。
+   */
+  private findTools(query: string): string {
+    if (!query.trim()) return 'error: query is required';
+    const catalog: CatalogEntry[] = this.catalog.map((t) => ({
+      name: t.name,
+      description: t.description ?? '',
+    }));
+    const matches = searchCatalog(catalog, query, this.active);
+    if (matches.length === 0) {
+      return `no unloaded tool matches "${query}". The tools already in your list may be the right ones.`;
+    }
+    const room = TOOL_LOAD_LIMIT - this.loadedCount;
+    if (room <= 0) {
+      return `tool budget is full (${TOOL_LOAD_LIMIT} extra tools loaded this session); work with what you have.`;
+    }
+    const taken = matches.slice(0, room);
+    for (const m of taken) {
+      this.active.add(m.name);
+      this.loadedCount += 1;
+    }
+    this.lastLoaded = taken.map((m) => m.name);
+    return taken
+      .map((m) => `${m.name} — ${m.description.slice(0, 200)}`)
+      .join('\n');
+  }
+
+  /**
    * Execute one tool call. `remember` is handled locally; everything else goes
    * to MCP. Failures come back as text rather than thrown — a failed call is
    * information the agent can act on, not a reason to kill the run.
@@ -568,6 +638,12 @@ export class AgentSession {
         default:
           return { text: this.workspace.updatePlan(args), failed: false };
       }
+    }
+    if (call.name === 'find_tools') {
+      return {
+        text: this.findTools(String((args as { query?: unknown }).query ?? '')),
+        failed: false,
+      };
     }
     if (call.name === 'fetch_page') {
       const page = await fetchPage(String((args as { url?: unknown }).url ?? ''));

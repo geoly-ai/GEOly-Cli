@@ -72,6 +72,14 @@ result is "wrote 42KB", not the 42KB.
 `update_plan` lets the agent publish a checklist for multi-step work, rendered as it changes.
 The agent decides the steps and when they are done; the CLI only displays them.
 
+## Tools
+
+The agent starts with a working set rather than the whole GEOly tool surface: the paths that
+account for ~90% of real usage, plus the local ones (files, memory, page fetch). Anything else —
+audits, shopping shelves, ads, source scorecards, sentiment, locale and category browsing — it
+pulls in on demand with `find_tools`, and you will see a `+ tool_name` line when it does. This
+keeps the choice in front of the model small and relevant; nothing is out of reach.
+
 ## Web access
 
 `fetch_page` runs **on your machine**: a plain HTTP client, no JavaScript execution — roughly
