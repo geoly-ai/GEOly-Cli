@@ -72,6 +72,17 @@ result is "wrote 42KB", not the 42KB.
 `update_plan` lets the agent publish a checklist for multi-step work, rendered as it changes.
 The agent decides the steps and when they are done; the CLI only displays them.
 
+## Web access
+
+`fetch_page` runs **on your machine**: a plain HTTP client, no JavaScript execution — roughly
+what a non-rendering crawler sees, which is the useful lens for GEO. It refuses private,
+loopback and link-local addresses (including cloud metadata), re-checks every redirect hop,
+and caps size and time. Nothing is proxied through GEOly, so it costs nothing.
+
+`web_search` is served by GEOly (a paid search API) and is exposed only to this CLI — other
+MCP clients bring their own web access. It is metered against your organization's quota, so
+prefer URLs you already have from GEOly data and search only when you need to find a page.
+
 ## Memory
 
 `geoly ask` reads `~/.geoly/memory/<brand-id>.md` at the start of every turn and puts it in

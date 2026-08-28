@@ -19,6 +19,7 @@ import { GEOLY_DIR, ensureDir } from './config.js';
 import { Ctx } from './context.js';
 import { GeolyError } from './errors.js';
 import { McpClient, ToolInfo, WRITE_TOOLS, unwrapToolResult } from './mcp.js';
+import { FETCH_TOOL, fetchPage } from './fetcher.js';
 import { applyRemember, memoryBlock, readNotes } from './memory.js';
 import { WORKSPACE_TOOLS, WORKSPACE_TOOL_NAMES, Workspace, type PlanItem, type WriteApproval } from './workspace.js';
 
@@ -181,6 +182,9 @@ function toFunctionTools(tools: ToolInfo[]): unknown[] {
     REMEMBER_TOOL,
     // harness：本地工具与 MCP 数据工具同处一个工具面，模型不需要知道谁在哪边执行。
     ...WORKSPACE_TOOLS,
+    // 服务端把 fetch_page 排除在 MCP 之外（其它客户端自带联网），CLI 自己补上：
+    // 本地抓取免费、无往返，且「不执行 JS 的纯 HTTP 视角」正是 GEO 要看的东西。
+    FETCH_TOOL,
   ];
 }
 
@@ -528,6 +532,12 @@ export class AgentSession {
         default:
           return { text: this.workspace.updatePlan(args), failed: false };
       }
+    }
+    if (call.name === 'fetch_page') {
+      const page = await fetchPage(String((args as { url?: unknown }).url ?? ''));
+      return 'error' in page
+        ? { text: `error: ${page.error}`, failed: true }
+        : { text: serializeResult(page), failed: false };
     }
     if (call.name === 'remember') {
       return {
