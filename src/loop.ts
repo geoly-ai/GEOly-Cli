@@ -45,6 +45,7 @@ const REMEMBER_TOOL = {
 
 export type LoopEvent =
   | { type: 'step'; n: number }
+  | { type: 'compact'; droppedMessages: number; beforeTokens: number; afterTokens: number }
   | { type: 'text'; text: string }
   | { type: 'tool'; phase: 'call' | 'result' | 'error'; name: string; message?: string; ms?: number }
   | { type: 'done'; steps: number; turnTokens: number; stopped: 'model' | 'budget' | 'interrupted' };
@@ -55,6 +56,61 @@ export interface ChatMessage {
   tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>;
   tool_call_id?: string;
 }
+
+/**
+ * 上下文预算（本地 loop 的欠账补齐）。
+ *
+ * 服务端 Sidekick 走 Responses API 的 contextManagement，超阈值自动压缩；本地 loop 走
+ * chat/completions 拿不到那套，**必须自己压**——而且也只能自己压：历史在客户端手里，
+ * 服务端压了客户端下一轮照样把全量发回去。
+ *
+ * token 估算用「JSON 字符数 / 4」的粗尺：真实分词要么得引入依赖，要么得多跑一次网络，
+ * 而这里只需要判断「是不是快满了」。宁可估高（提前压）也不要估低（顶穿后失败）。
+ */
+const CHARS_PER_TOKEN = 4;
+/** 压缩后至少保留这么多个最近区块，否则「刚查到的东西」会被摘要糊掉。 */
+const KEEP_RECENT_BLOCKS = 3;
+/**
+ * 压缩要一次压到阈值的这个比例以下。
+ * 只压到「刚好低于阈值」会抖：下一个工具结果又顶上去，于是每步都压一次，
+ * 每次都多花一次计费调用（stub 实测连压 4 次）。留出余量，压一次管很多步。
+ */
+const COMPACT_TARGET_RATIO = 0.6;
+
+function estimateTokens(value: unknown): number {
+  return Math.ceil(JSON.stringify(value ?? '').length / CHARS_PER_TOKEN);
+}
+
+/**
+ * 按「区块」切分消息。一个区块是不可再分的最小单位：
+ * 带 tool_calls 的 assistant 连同它全部的 tool 结果算一块，其余消息各自成块。
+ *
+ * ⚠️ 不能按「对话轮」切：一次深挖问题只有一条 user 消息＝只有一轮，而那恰恰是最容易
+ * 撑爆上下文的场景（stub 实测：轮切法在单轮里永远压不了）。按块切才能在一轮内下刀，
+ * 同时保证 tool_calls 与 tool 结果不被拆散——拆散会被上游直接拒绝。
+ */
+function splitBlocks(messages: ChatMessage[]): ChatMessage[][] {
+  const blocks: ChatMessage[][] = [];
+  for (const message of messages) {
+    const last = blocks[blocks.length - 1];
+    if (message.role === 'tool' && last && last[0]?.role === 'assistant' && last[0].tool_calls) {
+      last.push(message);
+      continue;
+    }
+    blocks.push([message]);
+  }
+  return blocks;
+}
+
+const COMPACT_INSTRUCTION = [
+  'Summarize the earlier part of this GEO analysis conversation so it can replace the raw',
+  'messages without losing what matters. Keep, in compact prose or bullets:',
+  '- what the user asked and any corrections or preferences they stated',
+  '- concrete numbers and findings the tools returned (metric, value, window, brand/platform)',
+  '- conclusions already reached, and anything explicitly ruled out',
+  'Drop: tool call mechanics, redundant restatements, raw rows already aggregated.',
+  'Write it as notes to your future self, not as a reply to the user.',
+].join('\n');
 
 /** Tool results go back to the model as text; bound them so one wide query cannot eat the context. */
 const MAX_TOOL_RESULT_CHARS = 24_000;
@@ -103,6 +159,9 @@ export function findLatestSession(brandId: string): string | undefined {
 }
 
 export class AgentSession {
+  /** 防止摘要套摘要：一次压缩进行中时不再触发新的压缩。 */
+  private compacting = false;
+
   private constructor(
     private readonly ctx: Ctx,
     private readonly client: McpClient,
@@ -156,6 +215,14 @@ export class AgentSession {
     return this.functionTools.length;
   }
 
+  /**
+   * 本轮请求的估算体量：工具面 + 全部历史。工具 schema 每一步都重发，是最大的固定
+   * 成分（72 个工具 ≈ 2 万 tokens），漏算它会让压缩迟迟不触发。
+   */
+  get estimatedTokens(): number {
+    return estimateTokens(this.functionTools) + estimateTokens(this.messages);
+  }
+
   /** Notes currently injected into this session's system prompt. */
   get memoryCount(): number {
     return readNotes(this.profile.brand.id).length;
@@ -192,6 +259,8 @@ export class AgentSession {
         return;
       }
       step += 1;
+      const compacted = await this.compactIfNeeded(signal);
+      if (compacted) yield compacted;
       yield { type: 'step', n: step };
 
       const assistantText: string[] = [];
@@ -249,6 +318,101 @@ export class AgentSession {
     }
 
     yield { type: 'done', steps: step, turnTokens, stopped: 'budget' };
+  }
+
+  /**
+   * 超阈值就把早期对话压成一段摘要。
+   *
+   * 只在轮边界下刀，且永远保留最近 KEEP_RECENT_TURNS 轮原文；摘要本身要多花一次
+   * 计费调用，所以只在真的超了才做，压完还超也不再连压（避免摘要套摘要的死循环）。
+   * 阈值来自服务端 profile（同一个 GEO_AGENT_COMPACT_THRESHOLD），0 = 关闭。
+   */
+  private async compactIfNeeded(
+    signal?: AbortSignal,
+  ): Promise<Extract<LoopEvent, { type: 'compact' }> | undefined> {
+    const threshold = this.profile.compact_threshold ?? 0;
+    if (threshold <= 0 || this.compacting) return undefined;
+    const before = this.estimatedTokens;
+    if (before <= threshold) return undefined;
+
+    const [system, ...rest] = this.messages;
+    const blocks = splitBlocks(rest);
+
+    // 必须留下的：当前正在回答的问题（否则模型忘了自己在干什么）+ 最近若干块（刚查到的
+    // 事实原文）。其余按原顺序压成一段摘要 —— 注意问题块常常是第 0 块，所以「保留集」
+    // 不能表达成一个前缀区间，否则单轮深挖场景永远找不到下刀点（stub 实测）。
+    let lastUserBlock = -1;
+    for (let i = blocks.length - 1; i >= 0; i--) {
+      if (blocks[i]?.[0]?.role === 'user') {
+        lastUserBlock = i;
+        break;
+      }
+    }
+    // 保留块数从 KEEP_RECENT_BLOCKS 起，一路收紧到「留下的部分低于目标线」为止，
+    // 但至少留 1 块最近的（以及当前问题）。
+    const target = threshold * COMPACT_TARGET_RATIO;
+    const buildKeep = (recent: number): Set<number> => {
+      const set = new Set<number>();
+      if (lastUserBlock >= 0) set.add(lastUserBlock);
+      for (let i = Math.max(0, blocks.length - recent); i < blocks.length; i++) set.add(i);
+      return set;
+    };
+    let keep = buildKeep(KEEP_RECENT_BLOCKS);
+    for (let recent = KEEP_RECENT_BLOCKS; recent > 1; recent--) {
+      keep = buildKeep(recent);
+      const keptTokens =
+        estimateTokens(this.functionTools) +
+        estimateTokens([...(system ? [system] : []), ...blocks.filter((_, i) => keep.has(i)).flat()]);
+      if (keptTokens <= target) break;
+    }
+    const staleIndexes = blocks.map((_, i) => i).filter((i) => !keep.has(i));
+    if (staleIndexes.length < 2) return undefined; // 可丢弃的历史不足，压了不划算
+
+    const firstStale = staleIndexes[0] as number;
+    const stale = staleIndexes.flatMap((i) => blocks[i] ?? []);
+
+    this.compacting = true;
+    let summary = '';
+    try {
+      // 摘要调用不带工具：它只需要读，不需要再查。
+      for await (const chunk of streamCompletion(
+        this.ctx,
+        {
+          messages: [
+            { role: 'system', content: COMPACT_INSTRUCTION },
+            { role: 'user', content: JSON.stringify(stale) },
+          ],
+        },
+        signal,
+      )) {
+        if (chunk.type === 'text') summary += chunk.text;
+      }
+    } catch {
+      // 压缩失败不该杀掉这一轮：继续用原历史发出去，顶多是上游报上下文超限。
+      this.compacting = false;
+      return undefined;
+    }
+    this.compacting = false;
+    if (!summary.trim()) return undefined;
+
+    const digest: ChatMessage = {
+      role: 'user',
+      content: `[Earlier conversation, compacted]\n${summary.trim()}`,
+    };
+    // 摘要插在第一块被丢弃的位置上，保持「问题 → 早期工作摘要 → 最近工作」的时间顺序。
+    const rebuilt: ChatMessage[] = system ? [system] : [];
+    blocks.forEach((block, i) => {
+      if (i === firstStale) rebuilt.push(digest);
+      if (keep.has(i)) rebuilt.push(...block);
+    });
+    this.messages = rebuilt;
+    this.append({ role: 'user', content: '[compacted]' });
+    return {
+      type: 'compact',
+      droppedMessages: stale.length,
+      beforeTokens: before,
+      afterTokens: this.estimatedTokens,
+    };
   }
 
   /**

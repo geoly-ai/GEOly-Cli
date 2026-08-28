@@ -38,7 +38,12 @@ geoly completions <shell>
   exits. `--continue` resumes the most recent session for the resolved brand. Piped stdin
   (`echo "..." | geoly`) answers once and exits. Transcripts are written to
   `~/.geoly/sessions/<id>.jsonl`.
-- `geoly ask` is the same agent, non-interactive, for scripts. The loop runs **in this process**: it fetches the
+- `geoly ask` is the same agent, non-interactive, for scripts.
+- **Context is managed locally.** When a session's estimated context passes the server-set
+  threshold, the CLI summarizes the older part of the conversation and continues with the
+  summary plus the recent work (`⤳ compacted …` on stderr). The current question and the
+  most recent tool results are always kept verbatim, and tool calls are never split from
+  their results. The summary itself costs one metered model call. The loop runs **in this process**: it fetches the
   system prompt and step budget from the server, lists your tools over MCP, and then drives
   the model — picking tools, running them, feeding results back — until it can answer.
   Inference is hosted and metered on your organization's plan; the loop, the transcript and

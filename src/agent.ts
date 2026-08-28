@@ -22,6 +22,8 @@ export interface AgentProfile {
   model: string;
   max_steps: number;
   system_prompt: string;
+  /** Compact the conversation past this many estimated tokens. 0/absent = never. */
+  compact_threshold?: number;
 }
 
 /** One assembled tool call from the model. */

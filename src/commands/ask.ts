@@ -75,6 +75,12 @@ export class AskCommand extends GeolyCommand {
           break;
         case 'step':
           break;
+        case 'compact':
+          status(
+            ctx,
+            `· compacted ${event.droppedMessages} messages (${event.beforeTokens} → ${event.afterTokens} tokens)`,
+          );
+          break;
       }
     }
 

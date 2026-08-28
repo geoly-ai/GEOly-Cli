@@ -214,6 +214,17 @@ export class ChatCommand extends GeolyCommand {
         case 'step':
           if (!quiet && !wroteText) spinner.update(`thinking · step ${event.n}`);
           break;
+        case 'compact':
+          if (quiet) break;
+          spinner.stop();
+          line(
+            style.dim(
+              `  ⤳ compacted ${event.droppedMessages} messages · ` +
+                `${formatTokens(event.beforeTokens)} → ${formatTokens(event.afterTokens)} tokens`,
+            ),
+          );
+          spinner.start('thinking');
+          break;
         case 'text': {
           if (!wroteText) {
             spinner.stop();
