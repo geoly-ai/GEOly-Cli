@@ -11,10 +11,10 @@
  */
 import * as readline from 'node:readline';
 import { Command, Option } from 'clipanion';
-import { withMark } from '../brand.js';
 import { Ctx } from '../context.js';
 import { GeolyError, asGeolyError } from '../errors.js';
 import { AgentSession } from '../loop.js';
+import { bottomRule, frameWidth, row, topRule } from '../frame.js';
 import { memoryPath, readNotes } from '../memory.js';
 import { isAmbiguousOrg, resolveAmbiguousOrg } from '../org-select.js';
 import type { WriteApproval } from '../workspace.js';
@@ -22,7 +22,8 @@ import { reportError } from '../output.js';
 import { Spinner, formatTokens, line, style, styleLine } from '../ui.js';
 import { GeolyCommand } from './base.js';
 
-const PROMPT = '› ';
+/** 输入行本身就是框的左边：上框线在提问前画，回车后收口。 */
+const PROMPT = `${style.dim('│')} ${style.cyan('❯')} `;
 
 const HELP = `
   ${style.bold('Commands')}
@@ -153,8 +154,12 @@ export class ChatCommand extends GeolyCommand {
     });
 
     for (;;) {
+      // 输入区是一个会收口的框：提问前画上沿，回车后画下沿。readline 不接管渲染，
+      // 所以下沿只能等提交后再画——换来的是任何宽度、任何换行都不会把框画坏。
+      line(topRule());
       const input = await prompt(rl);
       if (input === undefined) break; // Ctrl-D
+      line(bottomRule());
       const text = input.trim();
       if (!text) continue;
 
@@ -197,19 +202,19 @@ export class ChatCommand extends GeolyCommand {
         ? `~${session.workspace.root.slice(home.length)}`
         : session.workspace.root;
 
-    const info = [
-      `${style.bold('GEOly')} ${style.dim('· GEO agent')}`,
-      style.cyan(session.profile.brand.name),
-      style.dim(
-        `${session.profile.model} · ${session.toolCount}/${session.catalogSize} tools` +
-          (notes > 0 ? ` · ${notes} note${notes === 1 ? '' : 's'}` : ''),
-      ),
-      style.dim(workspace),
-      style.dim('/help · Ctrl-C interrupts · Ctrl-D exits'),
-    ];
-
     line();
-    for (const row of withMark(info)) line(row);
+    line(topRule('GEOly'));
+    line(row(style.cyan(session.profile.brand.name)));
+    line(
+      row(
+        style.dim(
+          `${session.profile.model} · ${session.toolCount}/${session.catalogSize} tools` +
+            (notes > 0 ? ` · ${notes} note${notes === 1 ? '' : 's'}` : ''),
+        ),
+      ),
+    );
+    line(row(style.dim(`${workspace} · /help · Ctrl-C interrupts · Ctrl-D exits`)));
+    line(bottomRule());
     line();
   }
 
