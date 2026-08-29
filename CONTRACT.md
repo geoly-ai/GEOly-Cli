@@ -117,7 +117,10 @@ drop. Nothing is uploaded: memory is local, per machine, and not shared with you
   `--error-format json` switches errors to a stable object:
   `{ "kind", "status", "tool", "retryAfter", "hint" }`
   with `kind` ∈ `auth_expired | grant_missing | rate_limited | subscription_required |
-  upstream_unavailable | tool_error | usage_error | write_blocked`.
+  quota_exhausted | upstream_unavailable | tool_error | usage_error | write_blocked`.
+  `subscription_required` and `quota_exhausted` both arrive as HTTP 402 but need opposite
+  responses: the first means there is no active subscription, the second means the plan is
+  active and this period's AI Credits are spent (the hint carries the reset date).
 - Truncation/pagination signals from the server (`_truncated`, `hasMore`, `totalPages`) are
   preserved in the payload; the CLI adds a stderr hint when they appear.
 
@@ -130,8 +133,14 @@ drop. Nothing is uploaded: memory is local, per machine, and not shared with you
 | 2 | Usage error (bad flag / unknown tool) | Fix the command; check `geoly schema` |
 | 3 | Auth (only in CI / `--no-auto-auth` / user cancelled) | Set `GEOLY_TOKEN` or complete browser auth once |
 | 4 | Rate limited (after honoring `Retry-After`, max 3 attempts / 60s budget) | Back off, retryable |
-| 5 | Subscription / billing (HTTP 402) | Human action required; don't retry |
+| 5 | No active subscription (HTTP 402) | Human action required; don't retry |
 | 6 | Upstream service error (5xx / timeout) | Short back-off, retryable |
+| 7 | AI Credits for this period are used up (HTTP 402) | Don't retry; wait for the reset date in the hint, or raise the limit |
+
+Agent turns retry themselves before giving up: a failure that happens **before the first
+byte of the response stream** (edge 5xx, network blip, 429) is re-sent up to twice, honoring
+`Retry-After`. A failure *after* bytes have arrived is never retried — the model already
+produced output and the run was already billed for it, so re-sending would duplicate both.
 
 ## Scope of v0
 

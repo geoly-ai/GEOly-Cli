@@ -63,35 +63,128 @@ function headers(token: string): Record<string, string> {
   };
 }
 
-/** Map a non-2xx agent response onto the CLI's error contract (mirrors mcp.ts). */
+/** Attempts beyond the first, for failures that happen before the stream starts. */
+const COMPLETION_RETRIES = 2;
+const RETRY_BASE_MS = 500;
+/** Cap so a hostile Retry-After cannot park the CLI for minutes. */
+const RETRY_MAX_MS = 5_000;
+
+/** Linear back-off, unless the server told us how long to wait. */
+function retryDelayMs(attempt: number, retryAfterSeconds?: number): number {
+  if (retryAfterSeconds && retryAfterSeconds > 0) {
+    return Math.min(retryAfterSeconds * 1000, RETRY_MAX_MS);
+  }
+  return Math.min(RETRY_BASE_MS * attempt, RETRY_MAX_MS);
+}
+
+/** Sleep that gives up as soon as the caller aborts (Ctrl-C must not wait out a back-off). */
+function delay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) return resolve();
+    const timer = setTimeout(done, ms);
+    function done() {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', done);
+      resolve();
+    }
+    signal.addEventListener('abort', done, { once: true });
+  });
+}
+
+/**
+ * Map a non-2xx agent response onto the CLI's error contract.
+ *
+ * Keyed off the server's `error` **code**, not the status alone: several distinct
+ * conditions share a status and need completely different fixes. The ones that actually
+ * show up in practice:
+ *
+ * | server                          | what it means                        | what fixes it        |
+ * |---------------------------------|--------------------------------------|----------------------|
+ * | 402 `SUBSCRIPTION_INACTIVE`     | the org has no active subscription   | subscribe            |
+ * | 402 `INSUFFICIENT_CREDITS`      | subscribed, AI Credits used up       | wait for reset / top up |
+ * | 403 `ORG_SELECTION_REQUIRED`    | the consented org scope went stale   | re-run `geoly auth login` |
+ * | 400 (ambiguous org / brand)     | needs `--org` or `--brand`           | the message lists the options |
+ * | 429                             | rate limited                         | back off (retryable) |
+ * | 502 / 503 / 504                 | model gateway or billing store down  | back off (retryable) |
+ *
+ * `retryable` is only ever set here, i.e. before a single byte of the stream has been
+ * consumed — see GeolyErrorOptions.retryable for why that boundary matters.
+ */
 async function throwForStatus(res: Response): Promise<never> {
   const body = await res.text().catch(() => '');
   let error = body.slice(0, 500);
+  let remaining: number | undefined;
+  let periodEnd: string | undefined;
   try {
-    const parsed = JSON.parse(body) as { error?: string };
+    const parsed = JSON.parse(body) as {
+      error?: string;
+      remaining?: number;
+      period_end?: string;
+    };
     if (parsed.error) error = parsed.error;
+    if (typeof parsed.remaining === 'number') remaining = parsed.remaining;
+    if (typeof parsed.period_end === 'string') periodEnd = parsed.period_end;
   } catch {
-    // non-JSON body — keep the raw prefix
+    // non-JSON body (a CDN error page, say) — keep the raw prefix
   }
+
   if (res.status === 402) {
+    // Two very different things share 402: out of credits vs no subscription at all.
+    if (error === 'INSUFFICIENT_CREDITS') {
+      const resets = periodEnd ? new Date(periodEnd).toLocaleDateString() : 'the next billing period';
+      throw new GeolyError(
+        'quota_exhausted',
+        `This organization's AI Credits for the current period are used up (remaining: ${remaining ?? 0}).`,
+        {
+          status: 402,
+          hint: `Credits reset on ${resets}. To raise the limit: https://app.geoly.ai/settings/billing`,
+        },
+      );
+    }
     throw new GeolyError('subscription_required', 'Subscription is inactive for this organization (HTTP 402)', {
       status: 402,
       hint: 'Hosted inference runs on your plan: https://app.geoly.ai/settings/billing',
     });
   }
+
   if (res.status === 403) {
+    // The consented org scope no longer resolves — re-authorizing is the only fix.
+    if (error === 'ORG_SELECTION_REQUIRED') {
+      throw new GeolyError('grant_missing', 'The organization this authorization was granted for is no longer available.', {
+        status: 403,
+        hint: 'Re-authorize and pick an organization: geoly auth login',
+      });
+    }
     throw new GeolyError('grant_missing', `Not allowed for this authorization: ${error}`, { status: 403 });
   }
+
   if (res.status === 429) {
-    throw new GeolyError('rate_limited', `Daily model budget reached for this organization (${error})`, {
+    // Retry-After is advisory; the caller backs off on its own if it's missing.
+    const after = Number(res.headers.get('retry-after'));
+    throw new GeolyError('rate_limited', `Rate limited by the GEOly service (${error})`, {
       status: 429,
+      retryAfter: Number.isFinite(after) && after > 0 ? after : undefined,
+      retryable: true,
     });
   }
+
   if (res.status === 400 || res.status === 404 || res.status === 413) {
-    throw new GeolyError('usage_error', error || `Rejected (HTTP ${res.status})`, { status: res.status });
+    // Scope errors carry the candidate organizations/brands in the message — pass it through
+    // verbatim, it is the actionable part.
+    throw new GeolyError('usage_error', error || `Rejected (HTTP ${res.status})`, {
+      status: res.status,
+      hint: /org_id|brand_id|ambiguous/i.test(error) ? 'Pass --org and/or --brand.' : undefined,
+    });
   }
+
+  if (res.status === 500 && error === 'MODEL_NOT_CONFIGURED') {
+    // Our misconfiguration, not a blip — retrying changes nothing.
+    throw new GeolyError('upstream_unavailable', 'The GEOly model gateway is not configured.', { status: 500 });
+  }
+
   throw new GeolyError('upstream_unavailable', `GEOly service error (HTTP ${res.status}): ${error}`, {
     status: res.status,
+    retryable: res.status >= 500,
   });
 }
 
@@ -102,7 +195,10 @@ async function authedFetch(ctx: Ctx, url: string, init: RequestInit): Promise<Re
   try {
     res = await fetch(url, { ...init, headers: headers(token) });
   } catch (err) {
-    throw new GeolyError('upstream_unavailable', `Network error: ${(err as Error).message}`, { cause: err });
+    throw new GeolyError('upstream_unavailable', `Network error: ${(err as Error).message}`, {
+      cause: err,
+      retryable: true,
+    });
   }
   if (res.status === 401) {
     await res.arrayBuffer().catch(() => undefined);
@@ -113,7 +209,10 @@ async function authedFetch(ctx: Ctx, url: string, init: RequestInit): Promise<Re
     try {
       res = await fetch(url, { ...init, headers: headers(token) });
     } catch (err) {
-      throw new GeolyError('upstream_unavailable', `Network error: ${(err as Error).message}`, { cause: err });
+      throw new GeolyError('upstream_unavailable', `Network error: ${(err as Error).message}`, {
+        cause: err,
+        retryable: true,
+      });
     }
   }
   return res;
@@ -148,21 +247,65 @@ export async function fetchProfile(
  */
 export async function* streamCompletion(
   ctx: Ctx,
-  body: { instructions?: string; input: unknown[]; tools?: unknown[] },
+  /**
+   * `brandId` must be the brand the profile resolved. Leaving it out lets the server fall
+   * back to the organization's first brand, so a multi-brand org would be billed — and have
+   * the run logged — against the wrong brand.
+   */
+  body: {
+    brandId: string;
+    instructions?: string;
+    input: unknown[];
+    tools?: unknown[];
+  },
   signal?: AbortSignal,
 ): AsyncGenerator<CompletionChunk> {
   const controller = new AbortController();
   const onAbort = () => controller.abort();
   signal?.addEventListener('abort', onAbort, { once: true });
   let idle = setTimeout(() => controller.abort(), STREAM_IDLE_TIMEOUT_MS);
+  /** Honoured on the next attempt when the server sent Retry-After. */
+  let lastRetryAfter: number | undefined;
 
   try {
-    const res = await authedFetch(ctx, apiUrl(ctx, '/api/agent/completions'), {
-      method: 'POST',
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-    if (!res.ok || !res.body) await throwForStatus(res);
+    const { brandId, ...rest } = body;
+    const payload = JSON.stringify({ brand_id: brandId, ...rest });
+
+    /**
+     * Retry the request itself, but **only until the first byte arrives**.
+     *
+     * The server already retries the model gateway inside a single request; this layer
+     * covers what that one cannot see — the request never reaching us (edge 5xx, network
+     * blip, cold start) or the gateway staying down past the server's own attempts.
+     * Without it a single blip kills the whole multi-step run and the tokens spent on the
+     * earlier steps are wasted.
+     *
+     * The boundary is not negotiable: once bytes have been consumed the model has already
+     * produced output and we have already been billed for it, so re-sending would duplicate
+     * both. Errors raised past this point are never marked retryable.
+     */
+    let res: Response | undefined;
+    for (let attempt = 0; attempt <= COMPLETION_RETRIES; attempt++) {
+      if (attempt > 0) await delay(retryDelayMs(attempt, lastRetryAfter), controller.signal);
+      try {
+        const candidate = await authedFetch(ctx, apiUrl(ctx, '/api/agent/completions'), {
+          method: 'POST',
+          body: payload,
+          signal: controller.signal,
+        });
+        if (candidate.ok && candidate.body) {
+          res = candidate;
+          break;
+        }
+        await throwForStatus(candidate);
+      } catch (err) {
+        const retryable =
+          err instanceof GeolyError && err.retryable && !controller.signal.aborted;
+        if (!retryable || attempt === COMPLETION_RETRIES) throw err;
+        lastRetryAfter = err instanceof GeolyError ? err.retryAfter : undefined;
+      }
+    }
+    if (!res || !res.body) throw new GeolyError('upstream_unavailable', 'No response stream');
 
     const decoder = new TextDecoder();
     let tail = '';

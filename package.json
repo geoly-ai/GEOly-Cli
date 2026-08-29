@@ -9,7 +9,8 @@
   },
   "scripts": {
     "dev": "tsx src/bin.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "verify:retry": "tsx scripts/verify-retry.mts"
   },
   "dependencies": {
     "clipanion": "4.0.0-rc.4"

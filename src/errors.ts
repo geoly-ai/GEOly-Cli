@@ -9,7 +9,10 @@ export type ErrorKind =
   | 'auth_expired'
   | 'grant_missing'
   | 'rate_limited'
+  /** The organization has no active subscription at all. */
   | 'subscription_required'
+  /** Subscribed, but this period's AI Credits are used up — a different fix entirely. */
+  | 'quota_exhausted'
   | 'upstream_unavailable'
   | 'tool_error'
   | 'usage_error'
@@ -24,6 +27,7 @@ export const EXIT: Record<string, number> = {
   rateLimited: 4,
   subscription: 5,
   upstream: 6,
+  quota: 7,
 };
 
 const KIND_EXIT: Record<ErrorKind, number> = {
@@ -31,6 +35,7 @@ const KIND_EXIT: Record<ErrorKind, number> = {
   grant_missing: EXIT.auth!,
   rate_limited: EXIT.rateLimited!,
   subscription_required: EXIT.subscription!,
+  quota_exhausted: EXIT.quota!,
   upstream_unavailable: EXIT.upstream!,
   tool_error: EXIT.general!,
   usage_error: EXIT.usage!,
@@ -43,6 +48,14 @@ export interface GeolyErrorOptions {
   retryAfter?: number;
   hint?: string;
   cause?: unknown;
+  /**
+   * Whether re-sending the exact same request could plausibly succeed.
+   *
+   * Only set for failures that happen *before* any bytes of a response stream have been
+   * consumed. A half-streamed turn must never be retried: the model already produced (and
+   * we were already billed for) output, so a retry would duplicate both.
+   */
+  retryable?: boolean;
 }
 
 export class GeolyError extends Error {
@@ -51,6 +64,7 @@ export class GeolyError extends Error {
   readonly tool?: string;
   readonly retryAfter?: number;
   readonly hint?: string;
+  readonly retryable: boolean;
 
   constructor(kind: ErrorKind, message: string, opts: GeolyErrorOptions = {}) {
     super(message, opts.cause !== undefined ? { cause: opts.cause } : undefined);
@@ -58,6 +72,7 @@ export class GeolyError extends Error {
     this.kind = kind;
     this.status = opts.status;
     this.tool = opts.tool;
+    this.retryable = opts.retryable === true;
     this.retryAfter = opts.retryAfter;
     this.hint = opts.hint;
   }

@@ -387,6 +387,7 @@ export class AgentSession {
       for await (const chunk of streamCompletion(
         this.ctx,
         {
+          brandId: this.profile.brand.id,
           instructions: this.instructions,
           input: this.messages,
           tools: this.functionTools,
@@ -549,6 +550,7 @@ export class AgentSession {
       for await (const chunk of streamCompletion(
         this.ctx,
         {
+          brandId: this.profile.brand.id,
           instructions: COMPACT_INSTRUCTION,
           input: [{ role: 'user', content: JSON.stringify(stale) }],
         },
