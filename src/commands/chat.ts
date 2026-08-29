@@ -15,6 +15,7 @@ import { Ctx } from '../context.js';
 import { GeolyError, asGeolyError } from '../errors.js';
 import { AgentSession } from '../loop.js';
 import { memoryPath, readNotes } from '../memory.js';
+import { isAmbiguousOrg, resolveAmbiguousOrg } from '../org-select.js';
 import type { WriteApproval } from '../workspace.js';
 import { reportError } from '../output.js';
 import { Spinner, formatTokens, line, style, styleLine } from '../ui.js';
@@ -81,18 +82,30 @@ export class ChatCommand extends GeolyCommand {
     // 写入审批需要 readline，而 readline 又要在会话建好后才开；用一个可后填的钩子解耦。
     let askApproval: WriteApproval = async () => this.allowWrites;
     const spinner = new Spinner();
-    spinner.start('connecting');
+    const open = async (c: Ctx): Promise<AgentSession> => {
+      spinner.start('connecting');
+      try {
+        return await AgentSession.create(c, {
+          brandId: this.brand,
+          locale,
+          resume: this.continueSession,
+          workspaceRoot: this.workspace,
+          approveWrite: (p, bytes) => askApproval(p, bytes),
+        });
+      } finally {
+        spinner.stop();
+      }
+    };
+
     let session: AgentSession;
     try {
-      session = await AgentSession.create(ctx, {
-        brandId: this.brand,
-        locale,
-        resume: this.continueSession,
-        workspaceRoot: this.workspace,
-        approveWrite: (p, bytes) => askApproval(p, bytes),
-      });
-    } finally {
-      spinner.stop();
+      session = await open(ctx);
+    } catch (err) {
+      // 多组织 token 且未指定组织时，服务端只能回一串 org id;这里换成带名字的
+      // 选择器，选完记进 profile，下次直接进会话。
+      if (!isAmbiguousOrg(err)) throw err;
+      const org = await resolveAmbiguousOrg(ctx, true);
+      session = await open({ ...ctx, org });
     }
 
     this.banner(session);

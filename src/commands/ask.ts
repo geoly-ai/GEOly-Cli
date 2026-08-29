@@ -14,6 +14,7 @@ import { Command, Option } from 'clipanion';
 import { Ctx } from '../context.js';
 import { GeolyError } from '../errors.js';
 import { AgentSession } from '../loop.js';
+import { isAmbiguousOrg, resolveAmbiguousOrg } from '../org-select.js';
 import { printResult, status } from '../output.js';
 import { GeolyCommand } from './base.js';
 
@@ -50,13 +51,24 @@ export class AskCommand extends GeolyCommand {
     const toolsUsed: string[] = [];
     let done: { steps: number; turnTokens: number; stopped: string } | undefined;
 
-    const session = await AgentSession.create(ctx, {
-      brandId: this.brand,
-      locale: this.locale as 'zh' | 'en' | undefined,
-      workspaceRoot: this.workspace,
-      // 脚本里没人可问：只有显式 --allow-writes 才放行。
-      approveWrite: async () => this.allowWrites,
-    });
+    let session: AgentSession;
+    try {
+      session = await AgentSession.create(ctx, {
+        brandId: this.brand,
+        locale: this.locale as 'zh' | 'en' | undefined,
+        workspaceRoot: this.workspace,
+        // 脚本里没人可问：只有显式 --allow-writes 才放行。
+        approveWrite: async () => this.allowWrites,
+      });
+    } catch (err) {
+      // 非交互场景不弹选择器（脚本/CI 没人可答），但至少把组织名字列出来，
+      // 而不是把服务端那串裸 id 原样甩给用户。
+      if (!isAmbiguousOrg(err)) throw err;
+      throw await resolveAmbiguousOrg(ctx, false).then(
+        () => err,
+        (enriched: unknown) => enriched,
+      );
+    }
     status(
       ctx,
       `· ${session.profile.brand.name} · ${session.profile.model} · ` +

@@ -77,6 +77,26 @@ export interface CredentialsFile {
   tokens?: StoredTokens;
 }
 
+/**
+ * Per-profile preferences that survive between runs. Currently just the organization:
+ * a multi-org user should pick once, not on every command.
+ */
+export interface SettingsFile {
+  defaultOrg?: string;
+}
+
+export function settingsPath(profile: string): string {
+  return path.join(GEOLY_DIR, `settings-${profile}.json`);
+}
+
+export function readSettings(profile: string): SettingsFile {
+  return readJson<SettingsFile>(settingsPath(profile)) ?? {};
+}
+
+export function saveDefaultOrg(profile: string, orgId: string): void {
+  writeJson(settingsPath(profile), { ...readSettings(profile), defaultOrg: orgId });
+}
+
 export interface ToolsCacheFile {
   endpoint: string;
   fetchedAt: number;

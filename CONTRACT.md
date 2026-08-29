@@ -124,6 +124,13 @@ drop. Nothing is uploaded: memory is local, per machine, and not shared with you
 - Truncation/pagination signals from the server (`_truncated`, `hasMore`, `totalPages`) are
   preserved in the payload; the CLI adds a stderr hint when they appear.
 
+## Organization resolution
+
+`--org` > this profile's remembered choice > the token's own scope. A token that can reach
+several organizations makes `geoly` ask once, with names, and remembers the answer
+(`~/.geoly/settings-<profile>.json`); non-interactive runs (`ask`, piped stdin) never
+prompt — they fail with the named list and the flag to add.
+
 ## Exit codes
 
 | Code | Meaning | Agent strategy |

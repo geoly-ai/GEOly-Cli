@@ -3,6 +3,7 @@
  * Endpoint override is allow-listed (HTTPS *.geoly.ai, plus localhost for
  * development) so a hostile env var can't redirect tokens elsewhere.
  */
+import { readSettings } from './config.js';
 import { GeolyError } from './errors.js';
 import { DEFAULT_ENDPOINT } from './version.js';
 
@@ -76,10 +77,13 @@ export function makeCtx(input: CtxInput): Ctx {
     timeoutS = Math.min(timeoutS, MAX_TIMEOUT_S);
   }
   const staticToken = process.env.GEOLY_TOKEN?.trim() || undefined;
+  const profile = sanitizeProfile(input.profile ?? 'default');
+  // 没给 --org 就用这个 profile 上一次选定的组织：多组织用户不该每条命令都带一遍
+  const org = input.org?.trim() || readSettings(profile).defaultOrg || undefined;
   return {
     endpoint: resolveEndpoint(),
-    profile: sanitizeProfile(input.profile ?? 'default'),
-    org: input.org?.trim() || undefined,
+    profile,
+    org,
     output,
     errorFormat,
     quiet: input.quiet ?? false,
