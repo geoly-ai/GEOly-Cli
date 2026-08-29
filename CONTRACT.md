@@ -127,7 +127,8 @@ drop. Nothing is uploaded: memory is local, per machine, and not shared with you
 ## Organization resolution
 
 `--org` > this profile's remembered choice > the token's own scope. A token that can reach
-several organizations makes `geoly` ask once, with names, and remembers the answer
+several organizations makes `geoly` ask once — an arrow-key list with names, type to
+filter — and remembers the answer
 (`~/.geoly/settings-<profile>.json`); non-interactive runs (`ask`, piped stdin) never
 prompt — they fail with the named list and the flag to add.
 

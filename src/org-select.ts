@@ -12,6 +12,7 @@ import type { Ctx } from './context.js';
 import { GeolyError } from './errors.js';
 import { McpClient } from './mcp.js';
 import { saveDefaultOrg } from './config.js';
+import { canPick, pickFromList } from './select.js';
 import { style } from './ui.js';
 
 export interface OrgOption {
@@ -88,6 +89,27 @@ export async function promptForOrg(
     const only = orgs[0] as OrgOption;
     saveDefaultOrg(ctx.profile, only.org_id);
     return only.org_id;
+  }
+
+  // 方向键选择器：33 条列表里让人「看到哪行就选哪行」，而不是把行号翻译成数字。
+  // 管道 / CI 下进不了 raw 模式，回落到编号输入（下面那段）。
+  if (canPick(io.input)) {
+    const chosen = await pickFromList(
+      orgs.map((o) => ({ value: o.org_id, label: o.name || o.org_id, detail: `(${o.org_id})` })),
+      {
+        title: 'Which organization?',
+        footer: '↑↓ move · type to filter · enter select · esc cancel  (saved as this profile default; override with --org)',
+        input: io.input,
+        output: io.output,
+      },
+    );
+    if (!chosen) throw new GeolyError('usage_error', 'No organization selected.', { hint: 'Pass --org <id> to skip the picker.' });
+    saveDefaultOrg(ctx.profile, chosen);
+    const picked = orgs.find((o) => o.org_id === chosen);
+    io.output.write(style.dim(`  → ${picked?.name || chosen}
+
+`));
+    return chosen;
   }
 
   const rl = readline.createInterface({ input: io.input, output: io.output });

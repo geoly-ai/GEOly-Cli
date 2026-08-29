@@ -1,5 +1,5 @@
 /** CLI version. Kept in sync with the release manifest by the release workflow. */
-export const VERSION = '0.2.1';
+export const VERSION = '0.2.2';
 
 /** MCP protocol version this client speaks. */
 export const MCP_PROTOCOL_VERSION = '2025-06-18';
