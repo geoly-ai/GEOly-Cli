@@ -11,6 +11,7 @@
  */
 import * as readline from 'node:readline';
 import { Command, Option } from 'clipanion';
+import { withMark } from '../brand.js';
 import { Ctx } from '../context.js';
 import { GeolyError, asGeolyError } from '../errors.js';
 import { AgentSession } from '../loop.js';
@@ -179,19 +180,36 @@ export class ChatCommand extends GeolyCommand {
   }
 
   /** Opening lines: what you are talking to, and what it carries. */
+  /**
+   * Opening frame: the mark, then what this session actually is.
+   *
+   * Ordered by how often it matters. The brand is the one thing you must not get wrong
+   * (every answer and every credit is attributed to it), so it leads and is the only line
+   * that is not dimmed. Model and tool counts answer "what am I talking to". The workspace
+   * is a safety fact — the agent can read and write there — so it is stated, shortened to
+   * `~` because the absolute path is noise in a home directory. Keys come last.
+   */
   private banner(session: AgentSession): void {
     const notes = session.memoryCount;
+    const home = process.env.HOME || process.env.USERPROFILE || '';
+    const workspace =
+      home && session.workspace.root.startsWith(home)
+        ? `~${session.workspace.root.slice(home.length)}`
+        : session.workspace.root;
+
+    const info = [
+      `${style.bold('GEOly')} ${style.dim('· GEO agent')}`,
+      style.cyan(session.profile.brand.name),
+      style.dim(
+        `${session.profile.model} · ${session.toolCount}/${session.catalogSize} tools` +
+          (notes > 0 ? ` · ${notes} note${notes === 1 ? '' : 's'}` : ''),
+      ),
+      style.dim(workspace),
+      style.dim('/help · Ctrl-C interrupts · Ctrl-D exits'),
+    ];
+
     line();
-    line(`  ${style.bold('GEOly')} ${style.dim('— GEO agent')}`);
-    line(
-      `  ${style.dim(
-        `${session.profile.brand.name} · ${session.profile.model} · ` +
-          `${session.toolCount} tools (${session.catalogSize} available)` +
-          (notes > 0 ? ` · ${notes} memory note${notes === 1 ? '' : 's'}` : ''),
-      )}`,
-    );
-    line(`  ${style.dim(`workspace ${session.workspace.root}`)}`);
-    line(`  ${style.dim('/help for commands · Ctrl-C interrupts · Ctrl-D exits')}`);
+    for (const row of withMark(info)) line(row);
     line();
   }
 
