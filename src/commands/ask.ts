@@ -21,7 +21,8 @@ import { GeolyCommand } from './base.js';
 export class AskCommand extends GeolyCommand {
   static paths = [['ask']];
   static usage = Command.Usage({
-    description: 'Ask the GEO agent a question; it picks and runs the tools itself.',
+    category: 'Agent',
+    description: 'Deprecated — use `geoly run`. One question to the local agent loop (kept for existing scripts).',
     examples: [
       ['Plain question', 'geoly ask "how did our visibility move over the last 30 days?"'],
       ['Stream the answer as text', 'geoly ask --output raw "which sources cite us most?"'],
@@ -42,6 +43,9 @@ export class AskCommand extends GeolyCommand {
   protected async run(ctx: Ctx): Promise<number> {
     const question = this.question.trim();
     if (!question) throw new GeolyError('usage_error', 'Question is empty');
+    // The hosted agent (`geoly run`) has the fuller toolset, deliverable specs and a receipt;
+    // this local one-shot stays only so existing scripts keep working.
+    status(ctx, 'geoly: `ask` is deprecated — prefer `geoly run "<question>"` (hosted agent, receipt, resumable)');
     if (this.locale && this.locale !== 'zh' && this.locale !== 'en') {
       throw new GeolyError('usage_error', `--locale must be zh or en, got: ${this.locale}`);
     }

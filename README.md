@@ -1,11 +1,15 @@
 # GEOly CLI
 
-**The [GEOly](https://www.geoly.ai) command-line interface — built for agents.**
+**The [GEOly](https://www.geoly.ai) command-line interface — for people and their agents.**
 
 [GEOly](https://www.geoly.ai) tracks how brands are mentioned and cited across AI engines
-(ChatGPT, Perplexity, Google AI Mode, Google AI Overview, Gemini, Copilot). This CLI is a thin terminal projection of the
-GEOly remote MCP server: every command maps to the same tools, the same metrics, and the same
-OAuth as the rest of the platform — so numbers never drift between surfaces.
+(ChatGPT, Perplexity, Google AI Mode, Google AI Overview, Gemini, Copilot). The CLI works like
+`gh`: you sign in once, the credential stays on your machine, and the agent you already use
+(Claude Code, Codex, Cursor…) runs `geoly` commands on your behalf — it never sees a key.
+
+- `geoly run "<question>"` — hand a whole question to GEOly's hosted GEO agent; get a receipt.
+- `geoly call <tool>` — one raw data tool, JSON out. Same tools, metrics and OAuth as the MCP server.
+- `geoly` — an interactive chat agent in your terminal, for when you want to dig in yourself.
 
 ## Install
 
@@ -31,24 +35,36 @@ Windows: `irm https://raw.githubusercontent.com/geoly-ai/GEOly-Cli/main/install.
 ## Quick start
 
 ```sh
-# Discover the tools available to your account (plan/mode aware)
+# Sign in and teach the agent hosts on this machine (Claude Code / Codex / Cursor) about GEOly
+geoly init
+
+# Ask the hosted GEO agent — one JSON receipt on stdout, progress on stderr
+geoly run "how did our ChatGPT visibility move this week?" --brand br_123
+
+# Raw data: discover, inspect, call
 geoly tools --json
-
-# Inspect a tool's parameters
 geoly schema get_brand_overview
-
-# Call it
 geoly call get_brand_overview --time_range 30d
+
+# Both credit pools
+geoly credits
 ```
 
-There is no login step: the first `geoly call` opens your browser for OAuth automatically,
-then continues the command. On headless machines, run `geoly auth login --no-browser` — it
-prints the authorization URL to open from any device, and credentials are cached after one
-sign-in. If you still hold a legacy read-only `geom_` token, it is also accepted:
+**Signing in.** Any command that needs credentials opens your browser once and continues
+(`geoly auth login` does it explicitly). No browser on this machine (SSH, a container)?
+`geoly auth login --remote` prints a sign-in URL to open anywhere; the page shows a code you
+paste back with `geoly auth login --code <code>` — this is picked automatically over SSH, in CI
+and without a display. Servers and CI use a token instead:
 
 ```sh
-export GEOLY_TOKEN=geom_xxxxxxxx   # legacy, read-only — never triggers a browser
+export GEOLY_TOKEN=geom_xxxxxxxx   # server / CI — never triggers a browser
 ```
+
+**Long runs.** `geoly run` follows a run for up to 100 s. If it is still going, the command
+exits 0 with `{"status":"running","run_id":…,"next":"geoly runs wait …"}` — the run keeps
+going on the server; run the `next` command to pick it up. The full receipt is also written to
+`./.geoly/runs/<run_id>.json` (add `.geoly/` to your `.gitignore`). Re-running the exact same
+command within 10 minutes replays the same run instead of paying for a new one.
 
 ## Built for agents
 
@@ -58,12 +74,24 @@ export GEOLY_TOKEN=geom_xxxxxxxx   # legacy, read-only — never triggers a brow
 - **stdout is data, stderr is status**: results are JSON on stdout (pretty in a TTY,
   compact when piped). `--error-format json` emits machine-readable error objects
   (`kind`, `status`, `retryAfter`, `hint`).
-- **Exit codes**: `0` ok · `1` tool error · `2` usage · `3` auth · `4` rate-limited ·
-  `5` subscription · `6` upstream.
-- **Read-only by default** in v0. Write tools arrive in a later release behind explicit
+- **Exit codes** (`geoly <command> --help` prints the same table):
+
+  ```
+  0  ok (a `running` hand-off from `geoly run` is also 0 — it is not a failure)
+  1  tool / run error — the server answered, the operation itself failed
+  2  usage error — bad flags or parameters; nothing was sent
+  3  auth — no valid credentials (run `geoly auth login`)
+  4  rate limited — honor `retryAfter` before retrying
+  5  subscription required — the organization has no active plan
+  6  upstream unavailable — network / gateway trouble; a short back-off then retry is reasonable
+  7  credits exhausted — this period's credits are used up
+  ```
+- **Help is plain text when piped** (`geoly --help | cat`), so agents can read it.
+- **Read-only** data tools in this release. Write tools arrive later behind explicit
   confirmation flags.
-- An [Agent Skill](./skills/geoly-mcp/SKILL.md) ships with this repo — it teaches your agent
-  the right tool for each question and the correct metric calibers.
+- **Skills, installed for you.** `geoly init` writes the GEOly [Agent Skill](./skills/geoly-mcp/SKILL.md)
+  into every agent host it finds (`~/.claude/skills`, `~/.codex/skills`, `~/.cursor/skills`),
+  fetching the current copy from app.geoly.ai; `geoly upgrade` refreshes it.
 
 ## Also available: remote MCP + Skill
 

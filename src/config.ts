@@ -28,6 +28,16 @@ export function cachePath(profile: string): string {
 export const LOCK_PATH = path.join(GEOLY_DIR, 'auth.lock');
 export const LAST_UPDATE_CHECK_PATH = path.join(GEOLY_DIR, 'last-update-check');
 
+/** A remote (paste-code) sign-in that was started but not yet completed with `--code`. */
+export function pendingAuthPath(profile: string): string {
+  return path.join(GEOLY_DIR, `pending-auth-${profile}.json`);
+}
+
+/** Where `geoly run` drops each run's full receipt: `./.geoly/runs/<run_id>.json` under the CWD. */
+export function runsDir(cwd = process.cwd()): string {
+  return path.join(cwd, '.geoly', 'runs');
+}
+
 /** Read a JSON file; returns undefined when missing or unparseable (self-healing). */
 export function readJson<T>(file: string): T | undefined {
   try {
@@ -75,6 +85,24 @@ export interface CredentialsFile {
   origin: string;
   client?: StoredClient;
   tokens?: StoredTokens;
+}
+
+/**
+ * State of a remote sign-in between `auth login --remote` (prints the URL) and
+ * `auth login --code` (finishes it). The PKCE verifier lives only here, on this machine —
+ * the code the user pastes is useless without it.
+ */
+export interface PendingAuthFile {
+  origin: string;
+  clientId: string;
+  redirectUri: string;
+  state: string;
+  verifier: string;
+  tokenEndpoint: string;
+  /** The URL the user must open — kept so a second command can show it again instead of starting over. */
+  authorizeUrl: string;
+  /** Epoch ms; a pending sign-in older than this is discarded. */
+  expiresAt: number;
 }
 
 /**

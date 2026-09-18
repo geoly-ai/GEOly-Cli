@@ -87,12 +87,50 @@ function seedBunCache(bun) {
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
-function main() {
+/**
+ * Skill drift gate. Three copies of the skill exist (app repo = source of truth → published
+ * on app.geoly.ai → embedded in this binary); a release must never ship a stale embedded copy.
+ *   1. src/skill-bundle.generated.ts must match skills/geoly-mcp/ (gen-skill-bundle --check);
+ *   2. skills/geoly-mcp/ must match what the app currently publishes (per-file sha256 from
+ *      /skills/geoly-mcp.json). Unreachable → warn only (offline release), never silently pass.
+ */
+async function checkSkillSync() {
+  console.log('==> skill bundle check');
+  sh('node scripts/gen-skill-bundle.mjs --check');
+  let live;
+  try {
+    const res = await fetch('https://app.geoly.ai/skills/geoly-mcp.json', { signal: AbortSignal.timeout(8000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    live = await res.json();
+  } catch (err) {
+    console.warn(`   ! could not fetch the published skill manifest (${err.message}) — sync not verified`);
+    return;
+  }
+  const crypto = await import('node:crypto');
+  const stale = [];
+  for (const f of live.files ?? []) {
+    const local = path.join(ROOT, 'skills', f.path);
+    const sha = fs.existsSync(local) ? crypto.createHash('sha256').update(fs.readFileSync(local)).digest('hex') : null;
+    if (sha !== f.sha256) stale.push(f.path);
+  }
+  if (stale.length) {
+    throw new Error(
+      `skills/geoly-mcp/ differs from the published skill ${live.version} (${stale.join(', ')}).\n` +
+        '   Sync from geoly-app (scripts/build-codex-plugin.mjs) or copy skills/geoly-mcp/, run ' +
+        '`node scripts/gen-skill-bundle.mjs`, commit, then release again.',
+    );
+  }
+  console.log(`   skill ${live.version} in sync with app.geoly.ai`);
+}
+
+async function main() {
   const status = sh('git status --porcelain');
   if (status) throw new Error(`working tree is not clean — commit first:\n${status}`);
   const version = resolveVersion();
   const bun = findBun();
   console.log(`==> releasing v${version} (bun ${sh(`"${bun}" --version`)})`);
+
+  await checkSkillSync();
 
   seedBunCache(bun);
 
@@ -151,4 +189,7 @@ function main() {
   console.log('==> reminder: git push the version-bump commit and tag if not already pushed.');
 }
 
-main();
+main().catch((err) => {
+  console.error(err.message ?? err);
+  process.exit(1);
+});

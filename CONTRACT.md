@@ -11,22 +11,69 @@ change without notice.
 | Command set listed below (interactive `geoly`, `ask`, `auth`, `tools`, `schema`, `call`, `upgrade`, `completions`) | Stable |
 | Tool names and input schemas | **Not stable** — they come from the GEOly MCP server at runtime. Probe with `geoly tools --json` before calling. |
 
-## Commands (v0)
+## Commands (v0.3)
 
 ```
 geoly                       [--brand <id>] [--locale zh|en] [--continue]
                             [--workspace <dir>] [--allow-writes]
-geoly auth login [--profile <name>] [--no-browser]
+geoly init [--agent claude-code|codex|cursor] [--no-login]
+geoly run "<question>" [--brand <id>] [--spec <slug>] [--context <text|@file>]
+                       [--max-credits <n>] [--wait <sec>|--no-wait] [--no-save] [-o <file>]
+                       [--idempotency-key <key>]
+geoly run <run_id> [--wait <sec>]
+geoly runs wait <run_id> [--wait <sec>] [--interval <sec>] [--no-save] [-o <file>]
+geoly runs list [--brand <id>] [--limit <n>]
+geoly credits
+geoly auth login [--profile <name>] [--no-browser] [--remote] [--code <code>]
 geoly auth status
 geoly auth logout
 geoly whoami
 geoly tools [--json] [--refresh]
 geoly schema <tool>
 geoly call <tool> [--<param> <value> ...] [--input -] [--data '<json>']
-geoly ask "<question>" [--brand <id>] [--locale zh|en]
+geoly ask "<question>" [--brand <id>] [--locale zh|en]      # deprecated → geoly run
 geoly upgrade
 geoly completions <shell>
 ```
+
+**Admission rule for new verbs** (borrowed from Google's `gws` helpers): if `geoly call` or
+`geoly run` can already do it, it does not become a command. Flags control orchestration, not
+output shape (output is `--output json|raw`, everywhere).
+
+### `geoly run` — the hosted GEO agent
+
+- **What it is.** One question in, one receipt out, from the server-side agent
+  (`POST /api/agent/runs`): the server picks tools, runs them, bills the organization's AI
+  Credits, and stores the run. The CLI only follows the SSE stream and renders. Prefer it over
+  `ask` (a local loop kept for old scripts) and over hand-built `call` chains for anything that
+  ends in a narrative.
+- **Waiting.** Follows for `--wait` seconds (default 100 — under the 120 s an agent host
+  usually gives one shell command). Not finished by then → exit **0** and
+  `{"status":"running","run_id":…,"elapsed_s":…,"next":"geoly runs wait <id>"}`. The run keeps
+  going on the server (server contract: disconnects never abort a run). `--no-wait` returns
+  right after the server acknowledges the run. Ctrl-C does the same hand-off.
+- **Picking up.** `geoly run <run_id>` prints the run's current state; `geoly runs wait <id>`
+  polls `GET /api/agent/runs/<id>` every `--interval` seconds (default 3) for up to `--wait`
+  seconds and prints the receipt when it lands; still running → the same `running` hand-off.
+  `geoly runs list` finds recent runs when the id was lost.
+- **`status` is the contract**: `done` / `failed` are final, `running` is not an answer.
+  (The server's run log says `succeeded`; the CLI normalises it to `done` everywhere.)
+- **Receipt.** `--output json` (default) prints the server's `done` payload plus `status`:
+  `run_id`, `answer`, `stopped`, `stopped_reason`, `steps`, `tools_used`, `usage`,
+  `credits_cost`, `credits_remaining`, `deliverable` (only with `--spec`), `saved_to`.
+  `--output raw` streams the answer text and ends with the run id on its own line.
+- **Receipt file.** Every finished run is also written to `./.geoly/runs/<run_id>.json` under
+  the current directory (mode 0600) so agents can read long answers from disk instead of
+  re-running; `--no-save` skips it, `-o <file>` chooses the path (stdout then only prints the
+  path). Add `.geoly/` to `.gitignore`.
+- **Idempotency.** Each `run` sends `Idempotency-Key = sha256(org, brand, spec, question,
+  context)`. Re-sending the same command within 10 minutes makes the server replay the existing
+  run (JSON, `replayed: true`, and if it is still running the CLI goes straight to the
+  `running` hand-off) — a shell that timed out and retried never pays twice.
+  `--idempotency-key` overrides the key for scripts.
+- **Failures.** A server-side `error` event → `kind: tool_error`, exit 1, `next: geoly run <id>`.
+  HTTP errors map as for every other command (402 `subscription_required` / `quota_exhausted`,
+  429 `rate_limited`, 5xx `upstream_unavailable`).
 
 - `geoly call` is the single execution entry point. Parameter flags use the MCP schema
   parameter names verbatim (including underscores, e.g. `--brand_id`). Booleans are
@@ -101,13 +148,31 @@ drop. Nothing is uploaded: memory is local, per machine, and not shared with you
 
 ## Authentication
 
-- **Lazy OAuth (default)**: any command that needs credentials opens the browser
-  automatically, prints the authorization URL to stderr, waits (180s timeout), then
-  continues. Concurrent commands share one auth flow.
-- **`GEOLY_TOKEN`** (static `geom_` token): read-only, never opens a browser. The CI path.
+Three ways in, picked in this order:
+
+1. **Browser round-trip (default, lazy)**: any command that needs credentials opens the
+   browser, prints the authorization URL to stderr, waits on a loopback port (180s timeout),
+   then continues. Concurrent commands share one flow. `--no-browser` prints the URL without
+   opening a browser but still listens locally (WSL and similar).
+2. **Paste-code (`--remote`)** for machines without a browser. Chosen automatically when
+   `SSH_CONNECTION`/`SSH_TTY`/`SSH_CLIENT` is set, `CI` is truthy, or Linux has no
+   `DISPLAY`/`WAYLAND_DISPLAY`. `geoly auth login --remote` registers the hosted redirect
+   `https://app.geoly.ai/api/mcp/cli/code` (one extra consent for clients registered before
+   it existed), prints the sign-in URL, and parks the PKCE verifier in
+   `~/.geoly/pending-auth-<profile>.json` (10 minutes). The user signs in anywhere; the page
+   shows a code; `geoly auth login --code <code>` exchanges it. In an interactive terminal
+   the code is prompted for on the spot. A lazy-auth command in remote mode prints the URL and
+   fails with exit 3 and `next: geoly auth login --code <code>` — it cannot block on a paste
+   that may come from another window. A pending sign-in is reused by later commands rather
+   than restarted, and only one is started per process.
+3. **`GEOLY_TOKEN`** (static `geom_` token): read-only, never opens a browser. Servers and CI.
+
 - Auto-degrade: when `CI=true`, `GEOLY_NO_AUTO_AUTH=1`, or `--no-auto-auth` is set, missing
   credentials fail fast with exit code 3 instead of blocking.
 - `--org <id>` narrows the session to one organization (maps to the server-side org scope).
+- The code shown on the hosted page is single-use, short-lived and useless without the
+  verifier on this machine; relaying it through an agent's chat adds no exposure the agent
+  does not already get from being able to run `geoly`.
 
 ## Output
 
@@ -115,7 +180,8 @@ drop. Nothing is uploaded: memory is local, per machine, and not shared with you
   `--output raw` returns the server's raw text.
 - **stderr**: status and errors. Default is human-readable (What / Why / Hint).
   `--error-format json` switches errors to a stable object:
-  `{ "kind", "status", "tool", "retryAfter", "hint" }`
+  `{ "kind", "status", "tool", "retryAfter", "hint", "next" }` (`next` = the exact command
+  that moves things forward, when one exists)
   with `kind` ∈ `auth_expired | grant_missing | rate_limited | subscription_required |
   quota_exhausted | upstream_unavailable | tool_error | usage_error | write_blocked`.
   `subscription_required` and `quota_exhausted` both arrive as HTTP 402 but need opposite
@@ -138,11 +204,11 @@ prompt — they fail with the named list and the flag to add.
 |---|---|---|
 | 0 | Success | — |
 | 1 | Tool / general error | Read the error object; usually don't retry |
-| 2 | Usage error (bad flag / unknown tool) | Fix the command; check `geoly schema` |
+| 2 | Usage error (bad flag / unknown tool / server rejected the parameters, JSON-RPC -32602) | Fix the command; check `geoly schema` |
 | 3 | Auth (only in CI / `--no-auto-auth` / user cancelled) | Set `GEOLY_TOKEN` or complete browser auth once |
-| 4 | Rate limited (after honoring `Retry-After`, max 3 attempts / 60s budget) | Back off, retryable |
+| 4 | Rate limited — HTTP 429 (after honoring `Retry-After`, max 3 attempts / 60s budget) or the server's in-band `GUARDED_RATE_LIMITED` / `CIRCUIT_OPEN` result (retried once within the same budget when `retry_after_seconds` allows) | Back off `retryAfter`, retryable |
 | 5 | No active subscription (HTTP 402) | Human action required; don't retry |
-| 6 | Upstream service error (5xx / timeout) | Short back-off, retryable |
+| 6 | Upstream service error (5xx / timeout / in-band `TOOL_TIMEOUT`, which carries `retryAfter` ≈ 60s — the query keeps running and is cached) | Short back-off, retry the same call once |
 | 7 | AI Credits for this period are used up (HTTP 402) | Don't retry; wait for the reset date in the hint, or raise the limit |
 
 Agent turns retry themselves before giving up: a failure that happens **before the first
@@ -150,7 +216,19 @@ byte of the response stream** (edge 5xx, network blip, 429) is re-sent up to twi
 `Retry-After`. A failure *after* bytes have arrived is never retried — the model already
 produced output and the run was already billed for it, so re-sending would duplicate both.
 
-## Scope of v0
+The table above is rendered from one source (`src/errors.ts` `EXIT_CODE_TABLE`), which also
+feeds `geoly <command> --help`; README mirrors it verbatim.
+
+## Update & mirrors
+
+- A daily, best-effort check (TTY only, 1.5 s budget) notices a newer binary **and** a newer
+  published skill than the one installed in agent hosts; it only prints a line, never rewrites
+  anything. `geoly upgrade` replaces the binary and refreshes the skill in hosts that have it.
+- `GEOLY_INSTALL_BASE` (same variable the install scripts honour) points both the update check
+  and `geoly upgrade` at a mirror (https on `*.geoly.ai` or github.com); anything else is
+  ignored with a warning. With a mirror set, github.com is never contacted.
+
+## Scope of v0.3
 
 - Read-only: write tools return `kind: write_blocked`. Write support ships in a later
   release behind explicit `--yes` confirmation.

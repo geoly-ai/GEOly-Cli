@@ -2,6 +2,36 @@
 
 All notable changes to the `geoly-mcp` agent skill.
 
+## 0.5.0
+
+- **CLI `geoly run` (CLI ≥ 0.3.0):** delegate a whole question to GEOly's hosted GEO agent
+  (`/api/agent/runs`) from the terminal — one JSON receipt (`status`, `run_id`, `answer`,
+  credits, `saved_to`), `running` hand-off with `geoly runs wait <id>` so agent shells don't time
+  out, `--spec` deliverables, `--max-credits`. Retries of the same command are idempotent for
+  10 minutes (server `Idempotency-Key`), so a timed-out shell never double-charges.
+- **Remote sign-in:** `geoly auth login --remote` + `--code` for machines without a local
+  browser (SSH / containers). Servers and CI keep using `GEOLY_TOKEN`.
+- **`geoly credits`:** both credit pools at a glance.
+- Exit code 7 (credits exhausted) documented; `--help` named as the authoritative flag reference.
+- Housekeeping: the published skill bundle (`/skills/geoly-mcp.zip`) is now regenerated on every
+  app build, and a test pins registered MCP tools ⊆ rate table ⊆ this catalog.
+
+## 0.4.2
+
+- **Two new brand-own tools from the AI Verdict view (custom monitoring, `/performance/verdict`).**
+  `get_competitor_polarity`: per-answer preference polarity vs each competitor mentioned in the
+  brand's answers (`coMentions` = judged records, not "both named"; brand need not be named) —
+  `weLose` / `tie` / `weWin`, `netLoss`, `netLossRate`; polarity, not visibility (pair with
+  `get_competitor_overview`). `get_risk_context_sources`: cited domains over-represented in
+  negative / mixed answers, with empirical-Bayes-shrunk `lift`; window fixed at 7 days;
+  co-occurrence, not causation. Both are own-monitoring data (free, nominal-price observed).
+- **Catalog gap closed:** `get_brand_search_queries` (query-fanout demand roots, ChatGPT only)
+  was live on MCP but missing from the catalog; documented under group C.
+- **Catalog corrected against the code:** `get_quota` (always registered) and
+  `resolve_page_context` (desktop page awareness) were live on MCP but never listed; both added
+  under group A. `get_discovered_links` footnote fixed — it is *excluded*, not "inert".
+  Read-only count 33 → 35; max surface 70 → 72.
+
 ## 0.4.1
 
 - **New public tool `get_public_brand_rank_citation` (Google AI Overview only).** Rankings ×

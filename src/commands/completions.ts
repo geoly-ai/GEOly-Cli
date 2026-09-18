@@ -10,6 +10,7 @@ const SUBCOMMANDS = ['auth', 'whoami', 'tools', 'schema', 'call', 'upgrade', 'co
 export class CompletionsCommand extends GeolyCommand {
   static paths = [['completions']];
   static usage = Command.Usage({
+    category: 'Setup',
     description: 'Print a shell completion script (bash or zsh).',
     examples: [['Install for bash', 'geoly completions bash >> ~/.bashrc']],
   });

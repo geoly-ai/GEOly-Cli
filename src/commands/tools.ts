@@ -9,6 +9,7 @@ import { GeolyCommand } from './base.js';
 export class ToolsCommand extends GeolyCommand {
   static paths = [['tools']];
   static usage = Command.Usage({
+    category: 'Data',
     description: 'List the tools currently exposed to your account (plan/mode aware).',
     details: 'Tool names come from the server at runtime — probe here before calling.',
   });
@@ -39,6 +40,7 @@ export class ToolsCommand extends GeolyCommand {
 export class SchemaCommand extends GeolyCommand {
   static paths = [['schema']];
   static usage = Command.Usage({
+    category: 'Data',
     description: "Print one tool's full input schema and description.",
     examples: [['Inspect a tool', 'geoly schema get_brand_overview']],
   });

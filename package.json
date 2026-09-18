@@ -1,6 +1,6 @@
 {
   "name": "geoly-cli",
-  "version": "0.2.4",
+  "version": "0.3.0",
   "private": true,
   "description": "GEOly CLI — the GEOly command-line interface, built for agents. https://www.geoly.ai",
   "type": "module",
@@ -10,6 +10,8 @@
   "scripts": {
     "dev": "tsx src/bin.ts",
     "typecheck": "tsc --noEmit",
+    "verify:run": "node --import tsx scripts/verify-run.mts",
+    "skill:bundle": "node scripts/gen-skill-bundle.mjs",
     "verify:retry": "tsx scripts/verify-retry.mts",
     "verify:org-picker": "tsx scripts/verify-org-picker.mts",
     "verify:picker": "tsx scripts/verify-picker-keys.mts"
