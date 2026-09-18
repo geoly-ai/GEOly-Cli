@@ -36,7 +36,12 @@ export class AuthLoginCommand extends GeolyCommand {
 
   protected async run(ctx: Ctx): Promise<number> {
     if (this.code !== undefined) {
-      if (!this.code.trim()) throw new GeolyError('usage_error', '--code is empty');
+      // Same charset the hosted page enforces (RFC 3986 unreserved): anything else is not a code.
+      if (!/^[A-Za-z0-9._~-]{8,512}$/.test(this.code.trim())) {
+        throw new GeolyError('usage_error', '--code does not look like an authorization code', {
+          hint: 'Copy it from the page exactly; it contains only letters, digits, . _ ~ -',
+        });
+      }
       const tokens = await completeRemoteLogin(ctx, this.code);
       printResult(ctx, this.authorizedResult(ctx, tokens.expiresAt, tokens.scope));
       return 0;
