@@ -30,6 +30,7 @@ interface ParsedCall {
 export class CallCommand extends Command {
   static paths = [['call']];
   static usage = Command.Usage({
+    category: 'Data',
     description: 'Call a GEOly tool. Parameter flags use the schema names verbatim.',
     examples: [
       ['Headline KPIs', 'geoly call get_brand_overview --time_range 30d'],
@@ -257,5 +258,6 @@ function fallbackCtx(): Ctx {
     timeoutMs: 30_000,
     noAutoAuth: true,
     noBrowser: true,
+    remote: false,
   };
 }

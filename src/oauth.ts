@@ -22,10 +22,12 @@ import type { AddressInfo } from 'node:net';
 import {
   CredentialsFile,
   LOCK_PATH,
+  PendingAuthFile,
   StoredClient,
   StoredTokens,
   credentialsPath,
   ensureDir,
+  pendingAuthPath,
   readJson,
   removeFile,
   writeJson,
@@ -37,7 +39,11 @@ import { VERSION } from './version.js';
 
 /** Fixed loopback ports registered as redirect URIs (contract §3). */
 const LOOPBACK_PORTS = [8760, 8761, 8762, 8763, 8764, 8765, 8766, 8767, 8768, 8769];
+/** Hosted landing page that shows the code for the paste-back flow (served by the app itself). */
+const REMOTE_REDIRECT_PATH = '/api/mcp/cli/code';
 const AUTH_TIMEOUT_MS = 180_000;
+/** A started-but-unfinished remote sign-in is only worth completing for this long. */
+const PENDING_AUTH_TTL_MS = 10 * 60_000;
 const LOCK_STALE_MS = 190_000;
 const TOKEN_SKEW_MS = 60_000;
 
@@ -88,7 +94,19 @@ export async function ensureAccessToken(ctx: Ctx, forceLogin = false): Promise<s
 
   if (!forceLogin && !autoAuthAllowed(ctx)) {
     throw new GeolyError('auth_expired', 'No valid credentials and automatic authorization is disabled', {
-      hint: 'Run `geoly auth login` once (use --no-browser on headless machines). A pre-existing legacy GEOLY_TOKEN is also accepted.',
+      hint: 'Run `geoly auth login` once (add --remote on machines without a browser). GEOLY_TOKEN is also accepted.',
+      next: 'geoly auth login',
+    });
+  }
+
+  // No browser on this machine: the loopback flow cannot complete here. Start the remote
+  // flow (prints the URL, parks the PKCE state) and stop with the exact command that
+  // finishes it — an agent relays the URL to the user and runs `--code` afterwards.
+  if (shouldUseRemoteFlow(ctx)) {
+    const started = await startRemoteLoginOnce(ctx);
+    throw new GeolyError('auth_expired', 'Sign-in required: open the URL above in any browser, then paste the code back.', {
+      hint: 'This machine has no local browser, so the sign-in completes in two steps.',
+      next: `geoly auth login --code <code>  # code is shown at ${started.redirectUri} after sign-in`,
     });
   }
 
@@ -112,6 +130,127 @@ export async function login(ctx: Ctx): Promise<StoredTokens> {
     return tokenFresh(creds?.tokens) ? creds!.tokens : undefined;
   };
   return withAuthLock(ctx, () => runAuthorizationFlow(ctx), peek);
+}
+
+/**
+ * Should sign-in avoid the loopback listener? True when there is plainly no browser on this
+ * machine: an SSH session, a Linux box without a display, or CI. Explicit `--remote` wins;
+ * `--no-browser` keeps the old meaning (print the URL, still listen on loopback — for WSL and
+ * friends where the browser lives on the same host).
+ */
+export function shouldUseRemoteFlow(ctx: Ctx): boolean {
+  if (ctx.remote) return true;
+  if (ctx.noBrowser) return false;
+  const env = process.env;
+  if (env.SSH_CONNECTION || env.SSH_TTY || env.SSH_CLIENT) return true;
+  if (env.CI && env.CI !== 'false' && env.CI !== '0') return true;
+  if (process.platform === 'linux' && !env.DISPLAY && !env.WAYLAND_DISPLAY) return true;
+  return false;
+}
+
+export interface RemoteLoginStart {
+  authorizeUrl: string;
+  redirectUri: string;
+}
+
+/**
+ * Step 1 of the paste-code flow: register the hosted redirect if the stored client lacks it,
+ * build the authorization URL with fresh PKCE, park the verifier in the pending file, and
+ * print the URL. Nothing waits — step 2 is `completeRemoteLogin`.
+ */
+export async function startRemoteLogin(ctx: Ctx): Promise<RemoteLoginStart> {
+  // A sign-in started minutes ago by another command is still perfectly good: show its URL
+  // again rather than registering a fresh client and orphaning the first pending state.
+  const existing = readJson<PendingAuthFile>(pendingAuthPath(ctx.profile));
+  if (existing && existing.origin === endpointOrigin(ctx) && existing.expiresAt > Date.now() && existing.authorizeUrl) {
+    printRemoteInstructions(existing.authorizeUrl);
+    return { authorizeUrl: existing.authorizeUrl, redirectUri: existing.redirectUri };
+  }
+  const meta = await discover(ctx);
+  const redirectUri = `${endpointOrigin(ctx)}${REMOTE_REDIRECT_PATH}`;
+  const client = await ensureClient(ctx, meta, redirectUri);
+
+  const verifier = base64url(crypto.randomBytes(32));
+  const challenge = base64url(crypto.createHash('sha256').update(verifier).digest());
+  const state = base64url(crypto.randomBytes(16));
+
+  const authorizeUrl = new URL(meta.authorization_endpoint);
+  authorizeUrl.searchParams.set('response_type', 'code');
+  authorizeUrl.searchParams.set('client_id', client.clientId);
+  authorizeUrl.searchParams.set('redirect_uri', redirectUri);
+  authorizeUrl.searchParams.set('scope', 'openid profile');
+  authorizeUrl.searchParams.set('state', state);
+  authorizeUrl.searchParams.set('code_challenge', challenge);
+  authorizeUrl.searchParams.set('code_challenge_method', 'S256');
+  authorizeUrl.searchParams.set('resource', ctx.endpoint);
+
+  const pending: PendingAuthFile = {
+    origin: endpointOrigin(ctx),
+    clientId: client.clientId,
+    redirectUri,
+    state,
+    verifier,
+    tokenEndpoint: meta.token_endpoint,
+    authorizeUrl: authorizeUrl.toString(),
+    expiresAt: Date.now() + PENDING_AUTH_TTL_MS,
+  };
+  writeJson(pendingAuthPath(ctx.profile), pending);
+  printRemoteInstructions(pending.authorizeUrl);
+  return { authorizeUrl: pending.authorizeUrl, redirectUri };
+}
+
+function printRemoteInstructions(url: string): void {
+  warn('geoly: open this URL in any browser and sign in:');
+  warn(`  ${url}`);
+  warn('geoly: then run:  geoly auth login --code <code shown on the page>');
+}
+
+/**
+ * Commands fire requests in parallel (whoami = initialize + tools/list); every one of them
+ * would otherwise start its own remote sign-in and register its own client. One start per
+ * process, shared by all callers.
+ */
+let remoteStartInFlight: Promise<RemoteLoginStart> | undefined;
+async function startRemoteLoginOnce(ctx: Ctx): Promise<RemoteLoginStart> {
+  if (!remoteStartInFlight) {
+    remoteStartInFlight = startRemoteLogin(ctx).finally(() => {
+      remoteStartInFlight = undefined;
+    });
+  }
+  return remoteStartInFlight;
+}
+
+/** Step 2 of the paste-code flow: exchange the pasted code with the parked PKCE verifier. */
+export async function completeRemoteLogin(ctx: Ctx, code: string): Promise<StoredTokens> {
+  const file = pendingAuthPath(ctx.profile);
+  const pending = readJson<PendingAuthFile>(file);
+  if (!pending || pending.origin !== endpointOrigin(ctx)) {
+    throw new GeolyError('usage_error', 'No remote sign-in is pending for this profile', {
+      hint: 'Start one with `geoly auth login --remote`, then paste the code it leads to.',
+      next: 'geoly auth login --remote',
+    });
+  }
+  if (pending.expiresAt < Date.now()) {
+    removeFile(file);
+    throw new GeolyError('auth_expired', 'The pending sign-in expired — start again', {
+      next: 'geoly auth login --remote',
+    });
+  }
+  const client = loadCredentials(ctx)?.client;
+  if (!client || client.clientId !== pending.clientId) {
+    removeFile(file);
+    throw new GeolyError('auth_expired', 'The client registration changed since the sign-in started — start again', {
+      next: 'geoly auth login --remote',
+    });
+  }
+  const meta: AsMetadata = { authorization_endpoint: '', token_endpoint: pending.tokenEndpoint };
+  assertTrustedAuthUrl(meta.token_endpoint, ctx, 'token endpoint');
+  const tokens = await exchangeCode(ctx, meta, client, code.trim(), pending.verifier, pending.redirectUri);
+  const creds: CredentialsFile = { origin: endpointOrigin(ctx), client, tokens };
+  saveCredentials(ctx, creds);
+  removeFile(file);
+  warn('geoly: authorized ✓');
+  return tokens;
 }
 
 // ---- Lock -----------------------------------------------------------------
@@ -286,15 +425,23 @@ async function discover(ctx: Ctx): Promise<AsMetadata> {
   return asMeta;
 }
 
-/** Reuse the stored DCR client or register a new one (once per endpoint origin). */
-async function ensureClient(ctx: Ctx, meta: AsMetadata): Promise<StoredClient> {
+/**
+ * Reuse the stored DCR client or register a new one (once per endpoint origin).
+ * `extraRedirectUri` (the hosted paste-code page) is only added when a caller needs it:
+ * a client registered before that page existed is re-registered on first `--remote` use,
+ * which costs the user one more consent screen — acceptable for a one-time upgrade.
+ */
+async function ensureClient(ctx: Ctx, meta: AsMetadata, extraRedirectUri?: string): Promise<StoredClient> {
   const existing = loadCredentials(ctx)?.client;
-  if (existing?.clientId) return existing;
+  if (existing?.clientId && (!extraRedirectUri || existing.redirectUris.includes(extraRedirectUri))) {
+    return existing;
+  }
 
   if (!meta.registration_endpoint) {
     throw new GeolyError('upstream_unavailable', 'Authorization server does not support dynamic client registration');
   }
   const redirectUris = LOOPBACK_PORTS.map((p) => `http://127.0.0.1:${p}/callback`);
+  if (extraRedirectUri) redirectUris.push(extraRedirectUri);
   const res = await fetch(meta.registration_endpoint, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },

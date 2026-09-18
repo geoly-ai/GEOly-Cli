@@ -1,4 +1,4 @@
-# GEOly MCP — full tool catalog (up to 68 tools)
+# GEOly MCP — full tool catalog (up to 72 tools)
 
 _Use this when you need a tool's exact parameters/enums/defaults, or to confirm whether a tool is exposed over MCP._
 
@@ -21,13 +21,15 @@ Parameter notation: `name: type (constraints, default)`. `time_range` is the sha
 
 ---
 
-## A. Discovery & routing (3)
+## A. Discovery & routing (5)
 
 | Tool | Purpose | Params |
 |---|---|---|
 | `list_organizations` | List org IDs the token can access (multi-org mode only) | — |
 | `list_brands` | List brand IDs in the org (multi-brand / multi-org only) | `org_id` (optional, multi-org only) |
 | `get_current_date` | Server time, for date-range validation | — |
+| `get_quota` | Quota status for the token's org(s): monthly MCP credits used / remaining, period reset date, enforcement mode. Always registered | — |
+| `resolve_page_context` | Desktop client page awareness: resolve the GEOly web-app URL the user is viewing into an entity scope — pageKind, entity id + title, effective params, suggested tools | `url` |
 
 ---
 
@@ -64,6 +66,7 @@ Parameter notation: `name: type (constraints, default)`. `time_range` is the sha
 | `get_prompt_record_detail` | Full detail of one monitoring record (answer, citations, sentiment, shopping cards) | `record_id, include_answer_text (bool, default false)` |
 | `get_prompt_citations` | Citation list for a prompt — raw or deduplicated URL list with `share%` | `prompt_id, deduplicate (bool), limit (1–500), offset, time_range, start_date, end_date, sort_order: asc\|desc, platform, domain` |
 | `get_prompt_mention_rates` | Per-prompt mention rate, **ascending** — blind-spot discovery ("which queries never mention us") | `time_range, min_records (1–100), limit (1–100), only_active (bool)` |
+| `get_brand_search_queries` | AI search queries (query fanout) for the brand: the real web searches ChatGPT / Perplexity issued while answering tracked prompts, scoped by time window (default 30 days) and optionally platform / topic. `mode=overview` KPI block + who AI verifies by name + which sites it scrapes; `groups` evidence table grouped by prompt; `query_detail` per-query drill-down; `prompt_queries` one prompt's queries (fixed 90-day window). Legacy modes still work: `roots` -> `overview`, `topic_roots` -> `groups`, and **`root_detail` -> `groups` with `root_key` used as a substring search over query text** (the old root drill returned every query containing the root, so a substring search is the closest match — an exact `query_detail` lookup would miss almost every legacy call) | `mode (overview, groups, query_detail, prompt_queries), time_range, start_date, end_date, platform, topic_id, normalized_query, prompt_id, page, query_search, type_filter, result_filter` |
 
 > Topic IDs/names: there is **no `get_topic_list` over MCP**. Discover topics via
 > `get_topic_analytics` (returns per-topic rows) or the `topic_name` filter on `get_prompt_list`.
@@ -90,9 +93,11 @@ Parameter notation: `name: type (constraints, default)`. `time_range` is the sha
 | `get_competitor_list` | Tracked competitors for the brand | — |
 | `get_competitor_overview` | Cross-prompt comparison vs **automatically discovered** competitors (**record-weighted** — not headline caliber). `somShare` = **records-based Share of Mentions** (each brand counts at most once per AI answer ÷ all brand-mentioned records; was visibility-weighted before 2026-07-24); adds `mentionedRecords`. `brand.mentionRate` = true mention rate (% of records with mentions>0; before 2026-07-23 it was a mention *density* that could exceed 100 — old pulls will not match) | `time_range, platform` |
 | `get_competitor_cooccurrence` | Brand + competitor co-occurrence: per-record detail + summary; optional answer text | `time_range, platform, limit (1–100), include_answer (bool), answer_max_chars` |
+| `get_competitor_polarity` | AI Verdict competitor board: per-answer **preference polarity** vs each competitor mentioned in the brand's answers (brand need not be named; `coMentions` = judged records, not "both named") — `weLose` / `tie` / `weWin`, `netLoss`, `netLossRate` (≥20 co-mentions only). Returns resolved `window`, `totalNetLosing` (headline) and `standings[]`. Polarity, **not** visibility — pair with `get_competitor_overview` | `time_range (7d, 30d, custom — custom requires start_date), start_date, end_date, platform` |
 | `get_platform_matrix` | Comparison matrix: brand + **automatically discovered** competitors × platform, or topics × platform. Cell `somShare` = records-based Share of Mentions WITHIN that platform column; cells also carry `mentionedRecords` | `dimension: topic\|competitor (default competitor), time_range, platform` |
 | `get_topic_analytics` | Per-topic analysis: sentiment, top **automatically discovered** competitors, response types, trends. Also the way to enumerate topics over MCP | `time_range: 7d\|30d\|90d\|180d\|all\|custom (default 30d; custom requires start_date), start_date, end_date, platform, topic_ids[], include_ungrouped (bool)` |
 | `get_sentiment_dashboard` | Sentiment: distribution, trends, platform comparison, brand correlation | `time_range: 7d\|30d\|90d\|180d, platform` |
+| `get_risk_context_sources` | AI Verdict risk board: cited domains over-represented in negative / mixed answers — `negativeCites`, `totalCites`, `negativeShare`, `lift` (shrunk ratio vs global). **Fixed 7-day window**; co-occurrence, not causation | — |
 | `get_brand_mention_samples` | Sample recent answers mentioning the brand: raw text + sentiment + extracted context | `time_range, platform, limit (1–30), answer_max_chars (200–4000)` |
 
 ---
@@ -108,7 +113,7 @@ Parameter notation: `name: type (constraints, default)`. `time_range` is the sha
 
 ---
 
-## G. Brand-own — write tools (require `tool_profile=standard|admin`)
+## G. Brand-own — write tools (require consent **write** grants)
 
 | Tool | Purpose | Params |
 |---|---|---|
@@ -175,21 +180,23 @@ sees far fewer.
 
 | Source | Count |
 |---|---|
-| Read-only (brand + GA4 + public-source + `get_current_date`) | 32 |
+| Read-only (brand + GA4 + public-source + `get_current_date` + `resolve_page_context`) | 35 |
 | Discovery selectors (`list_brands`, `list_organizations`) — multi-brand/org only | 2 |
 | Write (consent write grants) | 4 |
 | Report (user-scoped) | 2 |
+| Quota (`get_quota`, always registered) | 1 |
 | Public / industry (Grow+) | 28 |
-| **Max total** | **68** |
+| **Max total** | **72** |
 
-> The read-only 32 includes `get_discovered_links`, which is **inert over MCP** (its source
-> tool `fetch_page` is in-app only) — so 31 are functionally useful. Display sections A–J above
-> regroup these for navigation; `get_current_date` lives under both "discovery" (display) and
-> the read-only count (source).
+> `get_discovered_links` is in `MCP_EXCLUDED_TOOLS` (its source tool `fetch_page` is in-app
+> only) and is **not registered at all** — it is not part of the 35. Display sections A–J above
+> regroup these for navigation; `get_current_date` and `resolve_page_context` live under both
+> "discovery" (display) and the read-only count (source).
 
 ## Not on MCP (in-app agent only — do not call these over MCP)
 
-These exist in the codebase but are excluded from MCP registration:
-`web_search`, `fetch_page`, `display_data`, `display_chart`, `get_topic_list`,
+These exist in the codebase but never reach MCP — either listed in `MCP_EXCLUDED_TOOLS` or
+defined outside the read-only registration set (in-app agent / audit flows only):
+`web_search`, `fetch_page`, `get_discovered_links`, `display_data`, `display_chart`, `get_topic_list`,
 `report_page_analysis`, `generate_site_report`, `get_analysis_reports`, `get_report_detail`,
 `save_analysis_report`, `create_action_tasks`. Calling them over MCP returns "unknown tool".

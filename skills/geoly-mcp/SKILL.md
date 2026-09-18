@@ -3,13 +3,13 @@ name: geoly-mcp
 description: "Use when querying or reporting on AI brand visibility through the GEOly MCP server — picking the right tool, following the org/brand discovery flow, quoting the correct KPI caliber, and avoiding metric-definition pitfalls. Triggers: GEOly; GEO / AI-visibility reporting; citation rate, mention rate, AIGVR, Share of Model; daily trends; competitor, category whitespace, brand momentum; any call to get_brand_overview / query_analytics / get_prompt_* / get_citation_* / compare_public_brands / get_category_* / get_public_* tools."
 metadata:
   author: geoly
-  version: "0.4.1"
+  version: "0.5.0"
 ---
 
 # GEOly MCP
 
 [GEOly](https://www.geoly.ai) tracks how brands are mentioned and cited across AI engines (ChatGPT,
-Perplexity, Google AI Mode, Google AI Overview, Gemini, Copilot). The MCP server exposes **up to 68 tools** (the exact set depends
+Perplexity, Google AI Mode, Google AI Overview, Gemini, Copilot). The MCP server exposes **up to 72 tools** (the exact set depends
 on plan, mode, and write grants) across two surfaces:
 
 - **Self / brand-own** — the customer's own monitoring, audits, GA4, and write actions.
@@ -212,9 +212,35 @@ questions in a chat session, keep using the MCP tools.
   (`--brand_id`, `--time_range 30d`); arrays/objects take JSON strings; whole-object via
   `--data '<json>'` or stdin via `--input -`.
 - stdout is result JSON only (pipe to `jq`/files); status goes to stderr. Exit codes:
-  0 ok / 1 tool error / 2 usage / 3 auth / 4 rate-limited / 5 subscription / 6 upstream.
+  0 ok / 1 tool error / 2 usage / 3 auth / 4 rate-limited / 5 subscription / 6 upstream /
+  7 credits exhausted. `geoly --help` and `geoly <command> --help` are authoritative — read them
+  before guessing flags.
 - Windows gotcha: `.env` files are not read — persist tokens with
   `[Environment]::SetEnvironmentVariable('GEOLY_TOKEN','geom_…','User')`.
+- No local browser (SSH, container)? `geoly auth login --remote` prints a sign-in URL; the user
+  opens it anywhere, then pastes the shown code back with `geoly auth login --code <code>`
+  (CLI ≥ 0.3.0).
+
+**Delegate a whole question: `geoly run` (CLI ≥ 0.3.0 — check `geoly --version`):**
+
+When the user's ask needs several tools plus synthesis (a weekly health read, a content brief, a
+competitor comparison), hand the whole question to GEOly's hosted GEO agent instead of
+orchestrating tools yourself — it knows the calibers, routes tools, and returns one answer plus a
+credit receipt. Prefer `run` over ad-hoc `call` chains for anything that ends in a narrative.
+
+- `geoly run "<question>" --brand <brand_id>` — stdout is one JSON object (the default
+  `--output json`) with `status`, `run_id`, `answer`, `credits_cost`, `credits_remaining`, and
+  `saved_to` (the full payload is also written to `./.geoly/runs/<run_id>.json` — read that file
+  for long answers instead of re-running). `--output raw` streams the answer as text instead.
+- Optional: `--spec <slug>` for a server-defined deliverable (e.g. `weekly-brand-health`,
+  `content-brief`), `--max-credits <n>` to cap spend, `--context "<text>"` for extra input.
+- **`status` is the contract.** `done` = answer ready. `running` = the run is still going on
+  the server (the command waits ~100 s, then returns so your shell does not time out); it is
+  **not** a failure — run the `next` command it prints (`geoly runs wait <run_id>`) to
+  pick it up. Never re-issue the same `geoly run`; retries are idempotent for 10 minutes but
+  waiting is cheaper. `failed` = read `error`.
+- `geoly run <run_id>` shows a run's current state; `geoly runs list` finds recent ones;
+  `geoly credits` shows both credit pools before you start something expensive.
 
 ## Tool selection — question → tool
 
@@ -226,6 +252,8 @@ questions in a chat session, keep using the MCP tools.
 | A topic / text-defined **subset** daily series | `query_analytics` dataset=`topic_citations_daily` (+ `prompt_text_include/exclude`) |
 | Per-prompt visibility; search/list prompts | `get_prompt_list` (per-prompt rate in `geoMetrics.aigvr.citationRate`) |
 | One prompt's full detail (per-platform, SoM, competitors) | `get_prompt_detail` |
+| Which competitors does the AI prefer over us, answer by answer (weLose / weWin) | `get_competitor_polarity` |
+| Which cited sites ride along with negative / mixed answers about us | `get_risk_context_sources` |
 | A prompt's **full execution history** over a range (per-day records, e.g. 30-day shopping-card trend) | `list_prompt_records` (explicit `start_date`/`end_date` are UTC+8 business days) |
 | The actual **citation URLs / sources** for a prompt | `get_prompt_citations` (`deduplicate=true` for a source list) |
 | "Which queries never mention us" (blind spots) | `get_prompt_mention_rates` |

@@ -17,6 +17,8 @@ export interface Ctx {
   timeoutMs: number;
   noAutoAuth: boolean;
   noBrowser: boolean;
+  /** Force the paste-code sign-in (no loopback listener); auto-detected for SSH / CI / no display. */
+  remote: boolean;
   /** Legacy geom_ static token from GEOLY_TOKEN — read-only, never opens a browser. */
   staticToken?: string;
 }
@@ -30,6 +32,7 @@ export interface CtxInput {
   timeout?: string;
   noAutoAuth?: boolean;
   noBrowser?: boolean;
+  remote?: boolean;
 }
 
 const DEFAULT_TIMEOUT_S = 30;
@@ -90,6 +93,7 @@ export function makeCtx(input: CtxInput): Ctx {
     timeoutMs: timeoutS * 1000,
     noAutoAuth: input.noAutoAuth ?? false,
     noBrowser: input.noBrowser ?? false,
+    remote: input.remote ?? false,
     staticToken,
   };
 }

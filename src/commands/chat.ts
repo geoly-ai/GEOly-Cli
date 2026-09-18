@@ -40,6 +40,7 @@ const HELP = `
 export class ChatCommand extends GeolyCommand {
   static paths = [Command.Default, ['chat']];
   static usage = Command.Usage({
+    category: 'Chat',
     description: 'Start an interactive session with the GEO agent.',
     examples: [
       ['Start a session', 'geoly'],
