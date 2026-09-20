@@ -12,8 +12,9 @@ import { Command } from 'clipanion';
 import { Ctx } from '../context.js';
 import { GeolyError } from '../errors.js';
 import { printResult, status } from '../output.js';
-import { MANIFEST_URL, VERSION } from '../version.js';
+import { VERSION, resolveManifestUrl } from '../version.js';
 import { isNewer } from '../updatecheck.js';
+import { hostsWithSkill, installSkill, loadSkillBundle } from '../skills.js';
 import { GeolyCommand } from './base.js';
 
 interface ManifestFile {
@@ -23,7 +24,10 @@ interface ManifestFile {
 
 export class UpgradeCommand extends GeolyCommand {
   static paths = [['upgrade']];
-  static usage = Command.Usage({ description: 'Update the CLI binary to the latest release.' });
+  static usage = Command.Usage({
+    category: 'Setup',
+    description: 'Update the CLI binary to the latest release, and refresh the skill in hosts that have it.',
+  });
 
   protected async run(ctx: Ctx): Promise<number> {
     const binPath = process.execPath;
@@ -33,7 +37,7 @@ export class UpgradeCommand extends GeolyCommand {
       });
     }
 
-    const res = await fetch(MANIFEST_URL, { signal: AbortSignal.timeout(15_000) });
+    const res = await fetch(resolveManifestUrl(), { signal: AbortSignal.timeout(15_000) });
     if (!res.ok) {
       throw new GeolyError('upstream_unavailable', `Could not fetch the release manifest (HTTP ${res.status})`, {
         status: res.status,
@@ -44,7 +48,8 @@ export class UpgradeCommand extends GeolyCommand {
       throw new GeolyError('upstream_unavailable', 'Release manifest is malformed');
     }
     if (!isNewer(manifest.latest, VERSION)) {
-      printResult(ctx, { upToDate: true, version: VERSION });
+      const skills = await refreshInstalledSkills(ctx);
+      printResult(ctx, { upToDate: true, version: VERSION, skills });
       return 0;
     }
 
@@ -95,9 +100,26 @@ export class UpgradeCommand extends GeolyCommand {
         hint: `Download manually from ${entry.url} or re-run the installer: curl -fsSL https://geoly.ai/install.sh | sh`,
       });
     }
-    printResult(ctx, { upgraded: true, from: VERSION, to: manifest.latest, path: binPath });
+    const skills = await refreshInstalledSkills(ctx);
+    printResult(ctx, { upgraded: true, from: VERSION, to: manifest.latest, path: binPath, skills });
     return 0;
   }
+}
+
+/**
+ * Hosts that already carry the skill get the current copy rewritten in place, so a CLI
+ * upgrade never leaves an agent reading an older SKILL.md than the server expects.
+ * Hosts without it are left alone — that is `geoly init`'s decision, not ours.
+ */
+async function refreshInstalledSkills(ctx: Ctx): Promise<Array<{ host: string; version: string; previous: string | null }>> {
+  const hosts = hostsWithSkill();
+  if (!hosts.length) return [];
+  const bundle = await loadSkillBundle(ctx);
+  return hosts.map((host) => {
+    const r = installSkill(host, bundle);
+    status(ctx, `geoly: skill ${bundle.version} → ${host.label} (${r.previous ?? 'new'})`);
+    return { host: host.id, version: bundle.version, previous: r.previous ?? null };
+  });
 }
 
 /** https + known hosts only — mirrors install.sh's allowed_url(). */

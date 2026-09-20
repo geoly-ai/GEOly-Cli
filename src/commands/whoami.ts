@@ -9,6 +9,7 @@ import { GeolyCommand } from './base.js';
 export class WhoamiCommand extends GeolyCommand {
   static paths = [['whoami']];
   static usage = Command.Usage({
+    category: 'Data',
     description: 'Show who you are connected as and what the server exposes to you.',
   });
 

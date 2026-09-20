@@ -43,7 +43,7 @@ export type CompletionChunk =
   | { type: 'finish'; reason: string; totalTokens: number };
 
 /** Same-origin sibling of the configured MCP endpoint (endpoint allowlist already applied). */
-function apiUrl(ctx: Ctx, pathname: string, params?: Record<string, string | undefined>): string {
+export function apiUrl(ctx: Ctx, pathname: string, params?: Record<string, string | undefined>): string {
   const url = new URL(ctx.endpoint);
   url.pathname = pathname;
   url.search = '';
@@ -54,7 +54,7 @@ function apiUrl(ctx: Ctx, pathname: string, params?: Record<string, string | und
   return url.toString();
 }
 
-function headers(token: string): Record<string, string> {
+export function headers(token: string): Record<string, string> {
   return {
     'content-type': 'application/json',
     authorization: `Bearer ${token}`,
@@ -110,7 +110,7 @@ function delay(ms: number, signal: AbortSignal): Promise<void> {
  * `retryable` is only ever set here, i.e. before a single byte of the stream has been
  * consumed — see GeolyErrorOptions.retryable for why that boundary matters.
  */
-async function throwForStatus(res: Response): Promise<never> {
+export async function throwForStatus(res: Response): Promise<never> {
   const body = await res.text().catch(() => '');
   let error = body.slice(0, 500);
   let remaining: number | undefined;
@@ -189,11 +189,13 @@ async function throwForStatus(res: Response): Promise<never> {
 }
 
 /** Fetch with one lazy re-auth on 401, matching McpClient's behavior. */
-async function authedFetch(ctx: Ctx, url: string, init: RequestInit): Promise<Response> {
+export async function authedFetch(ctx: Ctx, url: string, init: RequestInit): Promise<Response> {
   let token = await ensureAccessToken(ctx);
+  // Caller headers (Accept for SSE, Idempotency-Key) layer on top of the auth/identity set.
+  const extra = (init.headers ?? {}) as Record<string, string>;
   let res: Response;
   try {
-    res = await fetch(url, { ...init, headers: headers(token) });
+    res = await fetch(url, { ...init, headers: { ...headers(token), ...extra } });
   } catch (err) {
     throw new GeolyError('upstream_unavailable', `Network error: ${(err as Error).message}`, {
       cause: err,
@@ -207,7 +209,7 @@ async function authedFetch(ctx: Ctx, url: string, init: RequestInit): Promise<Re
     }
     token = await ensureAccessToken(ctx, true);
     try {
-      res = await fetch(url, { ...init, headers: headers(token) });
+      res = await fetch(url, { ...init, headers: { ...headers(token), ...extra } });
     } catch (err) {
       throw new GeolyError('upstream_unavailable', `Network error: ${(err as Error).message}`, {
         cause: err,

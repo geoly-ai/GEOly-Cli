@@ -49,6 +49,7 @@ export function reportError(ctx: Ctx, err: GeolyError): number {
   }
   if (err.retryAfter !== undefined) lines.push(`  retry-after: ${err.retryAfter}s`);
   if (err.hint) lines.push(`  hint: ${err.hint}`);
+  if (err.next) lines.push(`  next: ${err.next}`);
   process.stderr.write(`${lines.join('\n')}\n`);
   return err.exitCode;
 }

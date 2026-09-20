@@ -3,8 +3,11 @@
  * 24h, 1.5s network budget, TTY-only, never throws, never blocks the result.
  */
 import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { LAST_UPDATE_CHECK_PATH, ensureDir } from './config.js';
-import { MANIFEST_URL, VERSION } from './version.js';
+import { SKILL_NAME, hostsWithSkill, installedVersion } from './skills.js';
+import { DEFAULT_ENDPOINT, VERSION, resolveManifestUrl } from './version.js';
 
 const CHECK_INTERVAL_MS = 24 * 3600 * 1000;
 
@@ -19,15 +22,43 @@ export async function maybeNotifyUpdate(): Promise<void> {
   try {
     ensureDir();
     fs.writeFileSync(LAST_UPDATE_CHECK_PATH, String(Date.now()));
-    const res = await fetch(MANIFEST_URL, { signal: AbortSignal.timeout(1500) });
-    if (!res.ok) return;
-    const manifest = (await res.json()) as { latest?: string };
-    if (manifest.latest && isNewer(manifest.latest, VERSION)) {
-      process.stderr.write(`geoly: v${manifest.latest} is available (you have v${VERSION}) — run \`geoly upgrade\`\n`);
-    }
+    const [binary, skill] = await Promise.all([checkBinary(), checkSkill()]);
+    if (binary) process.stderr.write(`${binary}\n`);
+    if (skill) process.stderr.write(`${skill}\n`);
   } catch {
     /* best-effort only */
   }
+}
+
+async function checkBinary(): Promise<string | undefined> {
+  const res = await fetch(resolveManifestUrl(), { signal: AbortSignal.timeout(1500) });
+  if (!res.ok) return undefined;
+  const manifest = (await res.json()) as { latest?: string };
+  if (manifest.latest && isNewer(manifest.latest, VERSION)) {
+    return `geoly: v${manifest.latest} is available (you have v${VERSION}) — run \`geoly upgrade\``;
+  }
+  return undefined;
+}
+
+/**
+ * The skill installed into agent hosts is a copy; the app publishes the current one. Once a
+ * day, compare and nudge — never rewrite a host's files behind the user's back (that is what
+ * `geoly init` / `geoly upgrade` are for).
+ */
+async function checkSkill(): Promise<string | undefined> {
+  const hosts = hostsWithSkill();
+  if (!hosts.length) return undefined;
+  const origin = new URL(process.env.GEOLY_MCP_ENDPOINT?.trim() || DEFAULT_ENDPOINT).origin;
+  const res = await fetch(`${origin}/skills/${SKILL_NAME}.json`, { signal: AbortSignal.timeout(1500) });
+  if (!res.ok) return undefined;
+  const live = (await res.json()) as { version?: string };
+  if (!live.version) return undefined;
+  const stale = hosts.filter((h) => {
+    const v = installedVersion(path.join(os.homedir(), h.skillsDir, SKILL_NAME));
+    return v !== undefined && isNewer(live.version!, v);
+  });
+  if (!stale.length) return undefined;
+  return `geoly: skill ${live.version} is available for ${stale.map((h) => h.label).join(', ')} — run \`geoly init\` to refresh`;
 }
 
 /** Compare dotted versions numerically segment by segment. */

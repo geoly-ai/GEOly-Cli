@@ -1,37 +1,102 @@
 /** `geoly auth login|status|logout` — explicit auth management (lazy auth makes login optional). */
 import { Command, Option } from 'clipanion';
 import { Ctx } from '../context.js';
-import { clearCredentials, loadCredentials, login } from '../oauth.js';
+import { GeolyError } from '../errors.js';
+import { clearCredentials, completeRemoteLogin, loadCredentials, login, shouldUseRemoteFlow, startRemoteLogin } from '../oauth.js';
 import { printResult, status } from '../output.js';
 import { GeolyCommand } from './base.js';
 
 export class AuthLoginCommand extends GeolyCommand {
   static paths = [['auth', 'login']];
   static usage = Command.Usage({
-    description: 'Authorize this machine via the browser (OAuth). Optional — any command triggers this automatically when needed.',
+    category: 'Setup',
+    description: 'Sign in via the browser (OAuth). Optional — any command triggers this automatically when needed.',
+    details: `
+      Three ways in, picked in this order:
+
+      1. Browser round-trip (default): opens the browser, signs in, returns to this terminal.
+      2. Paste-code (\`--remote\`, auto-selected over SSH / in CI / without a display): prints a
+         sign-in URL to open in any browser; the page shows a code to paste back with \`--code\`.
+      3. Servers and CI: set GEOLY_TOKEN instead of signing in.
+    `,
+    examples: [
+      ['Sign in on this machine', 'geoly auth login'],
+      ['No local browser — start the paste-code flow', 'geoly auth login --remote'],
+      ['…then finish it with the code from the page', 'geoly auth login --code 7Hk2…'],
+    ],
   });
 
-  noBrowser = Option.Boolean('--no-browser', false, { description: 'Print the authorization URL instead of opening a browser' });
+  noBrowser = Option.Boolean('--no-browser', false, { description: 'Print the authorization URL instead of opening a browser (still listens on loopback)' });
+  remote = Option.Boolean('--remote', false, { description: 'Paste-code sign-in for machines without a browser: print a URL, finish with --code' });
+  code = Option.String('--code', { description: 'Finish a paste-code sign-in with the code shown on the page' });
 
   protected ctxInput() {
-    return { ...super.ctxInput(), noBrowser: this.noBrowser };
+    return { ...super.ctxInput(), noBrowser: this.noBrowser, remote: this.remote };
   }
 
   protected async run(ctx: Ctx): Promise<number> {
+    if (this.code !== undefined) {
+      // Same charset the hosted page enforces (RFC 3986 unreserved): anything else is not a code.
+      if (!/^[A-Za-z0-9._~-]{8,512}$/.test(this.code.trim())) {
+        throw new GeolyError('usage_error', '--code does not look like an authorization code', {
+          hint: 'Copy it from the page exactly; it contains only letters, digits, . _ ~ -',
+        });
+      }
+      const tokens = await completeRemoteLogin(ctx, this.code);
+      printResult(ctx, this.authorizedResult(ctx, tokens.expiresAt, tokens.scope));
+      return 0;
+    }
+    if (shouldUseRemoteFlow(ctx)) {
+      const started = await startRemoteLogin(ctx);
+      if (process.stdin.isTTY && process.stderr.isTTY) {
+        // A person is here: take the code right away instead of making them run a second command.
+        const code = await promptLine('Paste the code: ');
+        if (code) {
+          const tokens = await completeRemoteLogin(ctx, code);
+          printResult(ctx, this.authorizedResult(ctx, tokens.expiresAt, tokens.scope));
+          return 0;
+        }
+      }
+      printResult(ctx, {
+        authorized: false,
+        pending: true,
+        profile: ctx.profile,
+        url: started.authorizeUrl,
+        next: 'geoly auth login --code <code>',
+      });
+      return 0;
+    }
     const tokens = await login(ctx);
-    printResult(ctx, {
-      authorized: true,
-      profile: ctx.profile,
-      expiresAt: new Date(tokens.expiresAt).toISOString(),
-      scope: tokens.scope,
-    });
+    printResult(ctx, this.authorizedResult(ctx, tokens.expiresAt, tokens.scope));
     return 0;
   }
+
+  private authorizedResult(ctx: Ctx, expiresAt: number, scope?: string) {
+    return { authorized: true, profile: ctx.profile, expiresAt: new Date(expiresAt).toISOString(), scope };
+  }
+}
+
+/** One line from an interactive terminal; empty string when the user just hits Enter. */
+function promptLine(prompt: string): Promise<string> {
+  return new Promise((resolve) => {
+    process.stderr.write(prompt);
+    let buf = '';
+    const onData = (chunk: Buffer): void => {
+      buf += chunk.toString('utf8');
+      const nl = buf.indexOf('\n');
+      if (nl === -1) return;
+      process.stdin.removeListener('data', onData);
+      process.stdin.pause();
+      resolve(buf.slice(0, nl).replace(/\r$/, '').trim());
+    };
+    process.stdin.resume();
+    process.stdin.on('data', onData);
+  });
 }
 
 export class AuthStatusCommand extends GeolyCommand {
   static paths = [['auth', 'status']];
-  static usage = Command.Usage({ description: 'Show the current credential state for this profile.' });
+  static usage = Command.Usage({ category: 'Setup', description: 'Show the current credential state for this profile.' });
 
   protected async run(ctx: Ctx): Promise<number> {
     if (ctx.staticToken) {
@@ -57,7 +122,7 @@ export class AuthStatusCommand extends GeolyCommand {
 
 export class AuthLogoutCommand extends GeolyCommand {
   static paths = [['auth', 'logout']];
-  static usage = Command.Usage({ description: 'Delete stored credentials for this profile.' });
+  static usage = Command.Usage({ category: 'Setup', description: 'Delete stored credentials for this profile.' });
 
   protected async run(ctx: Ctx): Promise<number> {
     clearCredentials(ctx);

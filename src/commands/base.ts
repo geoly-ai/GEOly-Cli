@@ -61,5 +61,6 @@ function makeSafeCtx(): Ctx {
     timeoutMs: 30_000,
     noAutoAuth: true,
     noBrowser: true,
+    remote: false,
   };
 }

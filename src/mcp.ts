@@ -18,6 +18,37 @@ import { MCP_PROTOCOL_VERSION, VERSION } from './version.js';
 const TOOLS_CACHE_TTL_MS = 60_000;
 const RATE_LIMIT_MAX_ATTEMPTS = 3;
 const RATE_LIMIT_BUDGET_MS = 60_000;
+/** Server error codes (from the metering wrapper's JSON tail) that mean "wait, then the same call works". */
+const RATE_LIMIT_CODES = new Set(['GUARDED_RATE_LIMITED', 'CIRCUIT_OPEN']);
+
+/** All text blocks of a tool result joined — what a human would read. */
+function resultText(result: ToolCallResult): string {
+  return (result.content ?? [])
+    .filter((c) => c.type === 'text' && typeof c.text === 'string')
+    .map((c) => c.text as string)
+    .join('\n');
+}
+
+/**
+ * The server's error results are "headline line + one JSON line" (metering contract §F):
+ * `{ error: 'GUARDED_RATE_LIMITED', tool, retry_after_seconds, ... }`. Pull that JSON out
+ * when present so the CLI can map it onto its own error kinds instead of showing prose.
+ */
+export function structuredErrorTail(
+  result: ToolCallResult,
+): { error: string; retryAfter?: number; payload: Record<string, unknown> } | undefined {
+  const lines = resultText(result).trim().split('\n');
+  const last = lines[lines.length - 1]?.trim();
+  if (!last?.startsWith('{')) return undefined;
+  try {
+    const payload = JSON.parse(last) as Record<string, unknown>;
+    if (typeof payload.error !== 'string') return undefined;
+    const ra = payload.retry_after_seconds;
+    return { error: payload.error, retryAfter: typeof ra === 'number' && ra > 0 ? ra : undefined, payload };
+  } catch {
+    return undefined;
+  }
+}
 
 /** Write tools are blocked in v0 (contract §9). trigger_prompt also consumes credits. */
 export const WRITE_TOOLS = new Set(['create_prompt', 'create_topic', 'create_competitor', 'trigger_prompt']);
@@ -157,9 +188,14 @@ export class McpClient {
 
       const rpc = await parseRpcBody(res, opts.tool);
       if (rpc.error) {
-        throw new GeolyError('tool_error', rpc.error.message || 'Tool call failed', {
+        // -32602 = the server's schema validation rejected the arguments before anything ran:
+        // that is the caller's mistake (usage, exit 2), not a tool failure (exit 1). Agents
+        // branch on this to fix the call instead of retrying or blaming the service.
+        const invalidParams = rpc.error.code === -32602;
+        throw new GeolyError(invalidParams ? 'usage_error' : 'tool_error', rpc.error.message || 'Tool call failed', {
           tool: opts.tool,
           cause: rpc.error,
+          hint: invalidParams ? `Check the parameters with: geoly schema ${opts.tool ?? '<tool>'}` : undefined,
         });
       }
       return rpc.result as T;
@@ -191,7 +227,16 @@ export class McpClient {
     }
   }
 
-  /** tools/call for one tool. Write tools are blocked client-side in v0. */
+  /**
+   * tools/call for one tool. Write tools are blocked client-side in v0.
+   *
+   * The server never rate-limits a tool call at the HTTP layer (its metering contract is
+   * "never break the connection"): a per-organization guard shows up as an `isError` result
+   * with `retry_after_seconds` in its JSON tail. Honor it once, inside the same call budget,
+   * so a script does not have to know about the in-band shape. Timeouts are not retried
+   * here — the server asks for ~60s and the result is cached when it lands, so that is the
+   * caller's decision.
+   */
   async callTool(name: string, args: Record<string, unknown>): Promise<ToolCallResult> {
     if (WRITE_TOOLS.has(name)) {
       throw new GeolyError('write_blocked', `Tool "${name}" performs writes — blocked in this CLI version`, {
@@ -199,7 +244,17 @@ export class McpClient {
         hint: 'Write support ships in a later release. Use the GEOly web app or the remote MCP with a write grant.',
       });
     }
-    return this.request<ToolCallResult>('tools/call', { name, arguments: args }, { tool: name });
+    const result = await this.request<ToolCallResult>('tools/call', { name, arguments: args }, { tool: name });
+    const tail = result.isError ? structuredErrorTail(result) : undefined;
+    if (tail && RATE_LIMIT_CODES.has(tail.error) && tail.retryAfter !== undefined) {
+      const waitMs = tail.retryAfter * 1000;
+      if (waitMs <= RATE_LIMIT_BUDGET_MS) {
+        warn(`geoly: ${name} is rate limited by the server — retrying once in ${tail.retryAfter}s`);
+        await sleep(waitMs);
+        return this.request<ToolCallResult>('tools/call', { name, arguments: args }, { tool: name });
+      }
+    }
+    return result;
   }
 
   /** initialize — used by whoami to read server info/instructions. */
@@ -243,12 +298,22 @@ async function parseRpcBody(res: Response, tool?: string): Promise<JsonRpcRespon
  * tool_error with the server's message.
  */
 export function unwrapToolResult(name: string, result: ToolCallResult): unknown {
-  const text = (result.content ?? [])
-    .filter((c) => c.type === 'text' && typeof c.text === 'string')
-    .map((c) => c.text as string)
-    .join('\n');
+  const text = resultText(result);
   if (result.isError) {
-    throw new GeolyError('tool_error', text || `Tool "${name}" returned an error`, { tool: name });
+    const tail = structuredErrorTail(result);
+    const headline = (text.split('\n')[0] ?? '').trim() || `Tool "${name}" returned an error`;
+    if (tail && RATE_LIMIT_CODES.has(tail.error)) {
+      throw new GeolyError('rate_limited', headline, { tool: name, retryAfter: tail.retryAfter, cause: tail.payload });
+    }
+    if (tail?.error === 'TOOL_TIMEOUT') {
+      throw new GeolyError('upstream_unavailable', headline, {
+        tool: name,
+        retryAfter: tail.retryAfter,
+        cause: tail.payload,
+        hint: 'Narrow the window / scope, or retry the same call once after ~60s (heavy queries keep running and are cached).',
+      });
+    }
+    throw new GeolyError('tool_error', text || headline, { tool: name, cause: tail?.payload });
   }
   if (result.structuredContent !== undefined) return result.structuredContent;
   if (text) {

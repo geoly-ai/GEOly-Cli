@@ -30,6 +30,27 @@ export const EXIT: Record<string, number> = {
   quota: 7,
 };
 
+/**
+ * The one place the exit-code table is written down. `--help`, README and the skill file all
+ * render from here — a hand-copied table drifted once already (README stopped at 6 while
+ * `quota` = 7 had shipped).
+ */
+export const EXIT_CODE_TABLE: ReadonlyArray<{ code: number; meaning: string }> = [
+  { code: 0, meaning: 'ok (a `running` hand-off from `geoly run` is also 0 — it is not a failure)' },
+  { code: 1, meaning: 'tool / run error — the server answered, the operation itself failed' },
+  { code: 2, meaning: 'usage error — bad flags or parameters; nothing was sent' },
+  { code: 3, meaning: 'auth — no valid credentials (run `geoly auth login`)' },
+  { code: 4, meaning: 'rate limited — honor `retryAfter` before retrying' },
+  { code: 5, meaning: 'subscription required — the organization has no active plan' },
+  { code: 6, meaning: 'upstream unavailable — network / gateway trouble; a short back-off then retry is reasonable' },
+  { code: 7, meaning: "credits exhausted — this period's credits are used up" },
+];
+
+/** Markdown-ish rendering shared by help text and docs. */
+export function renderExitCodeTable(): string {
+  return EXIT_CODE_TABLE.map((e) => `  ${e.code}  ${e.meaning}`).join('\n');
+}
+
 const KIND_EXIT: Record<ErrorKind, number> = {
   auth_expired: EXIT.auth!,
   grant_missing: EXIT.auth!,
@@ -56,6 +77,11 @@ export interface GeolyErrorOptions {
    * we were already billed for) output, so a retry would duplicate both.
    */
   retryable?: boolean;
+  /**
+   * The exact command that moves things forward, when one exists (e.g. after a remote
+   * sign-in was started: `geoly auth login --code <code>`). Agents run it verbatim.
+   */
+  next?: string;
 }
 
 export class GeolyError extends Error {
@@ -65,6 +91,7 @@ export class GeolyError extends Error {
   readonly retryAfter?: number;
   readonly hint?: string;
   readonly retryable: boolean;
+  readonly next?: string;
 
   constructor(kind: ErrorKind, message: string, opts: GeolyErrorOptions = {}) {
     super(message, opts.cause !== undefined ? { cause: opts.cause } : undefined);
@@ -75,6 +102,7 @@ export class GeolyError extends Error {
     this.retryable = opts.retryable === true;
     this.retryAfter = opts.retryAfter;
     this.hint = opts.hint;
+    this.next = opts.next;
   }
 
   get exitCode(): number {
@@ -88,6 +116,7 @@ export class GeolyError extends Error {
     if (this.tool !== undefined) out.tool = this.tool;
     if (this.retryAfter !== undefined) out.retryAfter = this.retryAfter;
     if (this.hint !== undefined) out.hint = this.hint;
+    if (this.next !== undefined) out.next = this.next;
     return out;
   }
 }
