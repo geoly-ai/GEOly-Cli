@@ -67,7 +67,9 @@ output shape (output is `--output json|raw`, everywhere).
   re-running; `--no-save` skips it, `-o <file>` chooses the path (stdout then only prints the
   path). Add `.geoly/` to `.gitignore`.
 - **Idempotency.** Each `run` sends `Idempotency-Key = sha256(org, brand, spec, question,
-  context)`. Re-sending the same command within 10 minutes makes the server replay the existing
+  context, max_credits)` — every input that changes what the server would do, so changing any
+  of them (a lower `--max-credits` included) is a new command, not a replay. Re-sending the same
+  command within 10 minutes makes the server replay the existing
   run (JSON, `replayed: true`, and if it is still running the CLI goes straight to the
   `running` hand-off) — a shell that timed out and retried never pays twice.
   `--idempotency-key` overrides the key for scripts.

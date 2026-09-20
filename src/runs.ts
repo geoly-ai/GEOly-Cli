@@ -41,7 +41,11 @@ export type RunOutcome =
 /** Heartbeats arrive every 10s; three misses in a row means the connection is gone. */
 const STREAM_IDLE_TIMEOUT_MS = 35_000;
 
-/** Stable key for "this exact command": same org/brand/spec/question/context → same run within the window. */
+/**
+ * Stable key for "this exact command": every input that changes what the server would do is in it
+ * (org, brand, spec, question, context, spend cap). Lowering `--max-credits` on a re-run is a new
+ * command — it must not replay the run that is still going with the higher cap.
+ */
 export function idempotencyKeyFor(ctx: Ctx, req: RunRequest): string {
   const material = JSON.stringify([
     ctx.org ?? '',
@@ -49,6 +53,7 @@ export function idempotencyKeyFor(ctx: Ctx, req: RunRequest): string {
     req.spec ?? '',
     req.question,
     req.context ?? '',
+    req.maxCredits ?? '',
   ]);
   return crypto.createHash('sha256').update(material).digest('hex');
 }
