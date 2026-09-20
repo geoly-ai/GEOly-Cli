@@ -57,8 +57,45 @@ export type LoopEvent =
   | { type: 'plan'; items: PlanItem[] }
   | { type: 'tools_loaded'; names: string[] }
   | { type: 'text'; text: string }
-  | { type: 'tool'; phase: 'call' | 'result' | 'error'; name: string; message?: string; ms?: number }
+  | {
+      type: 'tool';
+      phase: 'call' | 'result' | 'error';
+      name: string;
+      /** `call` only: the arguments, shortened for one line (`time_range: "30d", platform: "chatgpt"`) */
+      args?: string;
+      /** `result` only: size of what came back, so a 40s call that returned 2 bytes is visible as such */
+      bytes?: number;
+      message?: string;
+      ms?: number;
+    }
   | { type: 'done'; steps: number; turnTokens: number; stopped: 'model' | 'budget' | 'interrupted' };
+
+/**
+ * One-line preview of a tool call's arguments for the terminal: `k: v, k2: v2`, strings quoted,
+ * long values elided, whole thing capped. Never throws — malformed JSON just shows as-is, cut.
+ */
+export function previewArgs(raw: string, max = 72): string {
+  let parsed: unknown;
+  try {
+    parsed = raw.trim() ? JSON.parse(raw) : {};
+  } catch {
+    return raw.length > max ? `${raw.slice(0, max - 1)}…` : raw;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return '';
+  const parts = Object.entries(parsed as Record<string, unknown>).map(([k, v]) => {
+    const value =
+      typeof v === 'string'
+        ? JSON.stringify(v.length > 32 ? `${v.slice(0, 31)}…` : v)
+        : typeof v === 'number' || typeof v === 'boolean' || v === null
+          ? String(v)
+          : Array.isArray(v)
+            ? `[${v.length}]`
+            : '{…}';
+    return `${k}: ${value}`;
+  });
+  const joined = parts.join(', ');
+  return joined.length > max ? `${joined.slice(0, max - 1)}…` : joined;
+}
 
 /**
  * Responses 输入项。三种形态：
@@ -438,7 +475,7 @@ export class AgentSession {
       }
 
       // Calls within one step are independent — run them together, report in order.
-      for (const call of calls) yield { type: 'tool', phase: 'call', name: call.name };
+      for (const call of calls) yield { type: 'tool', phase: 'call', name: call.name, args: previewArgs(call.arguments) };
       const startedAt = Date.now();
       const results = await Promise.all(calls.map((call) => this.executeCall(call)));
       const ms = Date.now() - startedAt;
@@ -447,7 +484,7 @@ export class AgentSession {
         if (!result) continue;
         yield result.failed
           ? { type: 'tool', phase: 'error', name: call.name, message: result.text.slice(0, 200), ms }
-          : { type: 'tool', phase: 'result', name: call.name, ms };
+          : { type: 'tool', phase: 'result', name: call.name, ms, bytes: Buffer.byteLength(result.text, 'utf8') };
         if (call.name === 'update_plan' && !result.failed) {
           yield { type: 'plan', items: this.workspace.currentPlan };
         }

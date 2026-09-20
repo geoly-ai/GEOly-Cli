@@ -19,23 +19,36 @@ import { memoryPath, readNotes } from '../memory.js';
 import { isAmbiguousOrg, resolveAmbiguousOrg } from '../org-select.js';
 import type { WriteApproval } from '../workspace.js';
 import { reportError } from '../output.js';
-import { Spinner, formatTokens, line, style, styleLine } from '../ui.js';
+import { MarkdownLite, Spinner, formatBytes, formatTokens, line, style } from '../ui.js';
+import { VERSION } from '../version.js';
 import { GeolyCommand } from './base.js';
 
 /** 输入行本身就是框的左边：上框线在提问前画，回车后收口。 */
 const PROMPT = `${style.dim('│')} ${style.cyan('❯')} `;
 
+/** Slash commands, in the order they show in /help and in Tab completion. */
+const SLASH_COMMANDS = ['/new', '/status', '/memory', '/memory edit', '/tools', '/help', '/exit'];
+
 const HELP = `
   ${style.bold('Commands')}
     /new            start a fresh conversation (memory is kept)
+    /status         what this session is: brand, model, workspace, usage so far
     /memory         show the notes the agent carries into every turn
     /memory edit    print the path of the memory file so you can open it
     /tools          how many tools this session exposes
     /help           this list
     /exit           leave (Ctrl-D also works)
 
-  ${style.dim('Anything else is a question. Ctrl-C interrupts a running turn.')}
+  ${style.dim('Anything else is a question. Tab completes / commands. Ctrl-C interrupts a running turn.')}
 `;
+
+/** Running totals for /status and the exit line. */
+interface SessionStats {
+  turns: number;
+  steps: number;
+  tokens: number;
+  startedAt: number;
+}
 
 export class ChatCommand extends GeolyCommand {
   static paths = [Command.Default, ['chat']];
@@ -112,12 +125,20 @@ export class ChatCommand extends GeolyCommand {
     }
 
     this.banner(session);
+    const stats: SessionStats = { turns: 0, steps: 0, tokens: 0, startedAt: Date.now() };
 
     const rl = readline.createInterface({
       input: process.stdin,
       output: process.stderr,
       prompt: style.cyan(PROMPT),
       historySize: 200,
+      // Tab on a `/` prefix completes the slash commands; anything else completes nothing
+      // (a question is free text — we must not "complete" it into something the user did not type).
+      completer: (partial: string) => {
+        if (!partial.startsWith('/')) return [[], partial];
+        const hits = SLASH_COMMANDS.filter((c) => c.startsWith(partial));
+        return [hits.length ? hits : SLASH_COMMANDS, partial];
+      },
     });
 
     // 一次会话里只问一次「以后都允许」：既不让人反复按 y，也不默认放行。
@@ -165,14 +186,17 @@ export class ChatCommand extends GeolyCommand {
       if (!text) continue;
 
       if (text.startsWith('/')) {
-        const done = this.slash(text, session);
+        const done = this.slash(text, session, stats);
         if (done) break;
         continue;
       }
 
       running = new AbortController();
       try {
-        await this.runTurn(ctx, session, text, running.signal);
+        const turn = await this.runTurn(ctx, session, text, running.signal);
+        stats.turns += 1;
+        stats.steps += turn.steps;
+        stats.tokens += turn.tokens;
       } catch (err) {
         reportError(ctx, asGeolyError(err));
       } finally {
@@ -181,7 +205,15 @@ export class ChatCommand extends GeolyCommand {
     }
 
     rl.close();
-    line(style.dim(`  session ${session.id}`));
+    // Exit line: what this sitting cost, and how to come back to it.
+    line();
+    line(
+      style.dim(
+        `  ${stats.turns} ${stats.turns === 1 ? 'turn' : 'turns'} · ${stats.steps} steps · ` +
+          `${formatTokens(stats.tokens)} tokens · ${formatDuration(Date.now() - stats.startedAt)}`,
+      ),
+    );
+    line(style.dim(`  session ${session.id} · resume with geoly --continue`));
     return 0;
   }
 
@@ -204,7 +236,7 @@ export class ChatCommand extends GeolyCommand {
         : session.workspace.root;
 
     line();
-    line(topRule('GEOly'));
+    line(topRule(`GEOly ${style.dim(`v${VERSION}`)}`));
     line(row(style.cyan(session.profile.brand.name)));
     line(
       row(
@@ -214,18 +246,37 @@ export class ChatCommand extends GeolyCommand {
         ),
       ),
     );
-    line(row(style.dim(`${workspace} · /help · Ctrl-C interrupts · Ctrl-D exits`)));
+    line(row(style.dim(workspace)));
+    line(row(style.dim('/help · /status · Tab completes · Ctrl-C interrupts · Ctrl-D exits')));
     line(bottomRule());
     line();
   }
 
+  /** `/status` — the banner's facts plus what has happened since. */
+  private status(session: AgentSession, stats: SessionStats): void {
+    const pairs: Array<[string, string]> = [
+      ['brand', `${session.profile.brand.name} ${style.dim(session.profile.brand.id)}`],
+      ['model', session.profile.model],
+      ['tools', `${session.toolCount} loaded · ${session.catalogSize} reachable`],
+      ['memory', `${session.memoryCount} note${session.memoryCount === 1 ? '' : 's'} · ${memoryPath(session.profile.brand.id)}`],
+      ['workspace', session.workspace.root],
+      ['session', `${session.id} · ${stats.turns} turn${stats.turns === 1 ? '' : 's'} · ${stats.steps} steps · ${formatTokens(stats.tokens)} tokens · ${formatDuration(Date.now() - stats.startedAt)}`],
+    ];
+    line();
+    for (const [k, v] of pairs) line(`  ${style.dim(k.padEnd(10))} ${v}`);
+    line();
+  }
+
   /** Slash commands. Returns true when the session should end. */
-  private slash(input: string, session: AgentSession): boolean {
+  private slash(input: string, session: AgentSession, stats: SessionStats): boolean {
     const [cmd, ...rest] = input.slice(1).split(/\s+/);
     switch (cmd) {
       case 'exit':
       case 'quit':
         return true;
+      case 'status':
+        this.status(session, stats);
+        return false;
       case 'new':
         session.reset();
         line(style.dim('  new conversation'));
@@ -272,18 +323,28 @@ export class ChatCommand extends GeolyCommand {
     session: AgentSession,
     question: string,
     signal?: AbortSignal,
-  ): Promise<void> {
+  ): Promise<{ steps: number; tokens: number }> {
     const spinner = new Spinner();
     const quiet = ctx.quiet;
+    // Interactive turns can be interrupted; say so where the eye is (piped stdin cannot).
+    if (process.stdin.isTTY) spinner.hint = 'Ctrl-C to interrupt';
     if (!quiet) spinner.start('thinking');
+    const startedAt = Date.now();
+    const md = new MarkdownLite();
     let wroteText = false;
     let pending = '';
+    let result = { steps: 0, tokens: 0 };
     // 未以换行结尾的残句必须在下一个「非文字事件」前吐出来，否则它会被工具行
     // 插队到后面，读者看到的顺序和实际发生的顺序不一致（stub 实测）。
     const flushPending = () => {
       if (!pending) return;
-      process.stdout.write(`${styleLine(pending)}\n`);
+      process.stdout.write(`${md.line(pending)}\n`);
       pending = '';
+    };
+    // The answer marker (`⏺`) is chrome, so it goes to stderr — but only when stdout is the same
+    // terminal; when the answer is being piped to a file the marker would just be a stray glyph.
+    const answerMarker = () => {
+      if (!quiet && process.stdout.isTTY) process.stderr.write(`${style.cyan('⏺')} `);
     };
 
     for await (const event of session.run(question, signal)) {
@@ -322,28 +383,33 @@ export class ChatCommand extends GeolyCommand {
           if (!wroteText) {
             spinner.stop();
             if (!quiet) line();
+            answerMarker();
             wroteText = true;
           }
           // Style only complete lines; a fragment could be half a heading.
           pending += event.text;
           const parts = pending.split('\n');
           pending = parts.pop() ?? '';
-          for (const l of parts) process.stdout.write(`${styleLine(l)}\n`);
+          for (const l of parts) process.stdout.write(`${md.line(l)}\n`);
           break;
         }
         case 'tool':
           if (quiet) break;
           flushPending();
           if (event.phase === 'call') {
-            spinner.update(event.name);
-            if (!wroteText) spinner.start(event.name);
+            // The call line goes up the moment it starts (Claude Code's `⏺ Tool(args)`): a 40s
+            // query then reads as "it is running this", not "it hung". The result line closes it.
+            spinner.stop();
+            line(`${style.green('⏺')} ${style.bold(event.name)}${event.args ? style.dim(`(${event.args})`) : ''}`);
+            spinner.start(event.name);
+            wroteText = false;
           } else {
             spinner.stop();
-            const ms = event.ms ? ` ${style.dim(`${(event.ms / 1000).toFixed(1)}s`)}` : '';
+            const secs = event.ms ? `${(event.ms / 1000).toFixed(1)}s` : '';
             line(
               event.phase === 'error'
-                ? `  ${style.red('✗')} ${event.name}${ms} ${style.dim(event.message ?? '')}`
-                : `  ${style.green('⏺')} ${style.dim(event.name)}${ms}`,
+                ? `  ${style.dim('⎿')} ${style.red('✗')} ${style.dim(event.message ?? 'failed')}`
+                : `  ${style.dim('⎿')} ${style.dim([secs, event.bytes !== undefined ? formatBytes(event.bytes) : ''].filter(Boolean).join(' · '))}`,
             );
             spinner.start('thinking');
           }
@@ -351,6 +417,7 @@ export class ChatCommand extends GeolyCommand {
         case 'done': {
           flushPending();
           spinner.stop();
+          result = { steps: event.steps, tokens: event.turnTokens };
           if (quiet) break;
           const note =
             event.stopped === 'budget'
@@ -361,7 +428,7 @@ export class ChatCommand extends GeolyCommand {
           line();
           line(
             style.dim(
-              `  ${event.steps} ${event.steps === 1 ? 'step' : 'steps'} · ${formatTokens(event.turnTokens)} tokens${note}`,
+              `  ${event.steps} ${event.steps === 1 ? 'step' : 'steps'} · ${formatTokens(event.turnTokens)} tokens · ${formatDuration(Date.now() - startedAt)}${note}`,
             ),
           );
           line();
@@ -369,7 +436,17 @@ export class ChatCommand extends GeolyCommand {
         }
       }
     }
+    return result;
   }
+}
+
+/** `8.2s` / `1m 12s` / `1h 03m` — durations the way a person reads them. */
+function formatDuration(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${(ms / 1000).toFixed(s < 10 ? 1 : 0)}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${String(s % 60).padStart(2, '0')}s`;
+  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`;
 }
 
 /** One line of input; undefined on Ctrl-D. */
