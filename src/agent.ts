@@ -112,7 +112,7 @@ function delay(ms: number, signal: AbortSignal): Promise<void> {
  */
 export async function throwForStatus(res: Response): Promise<never> {
   const body = await res.text().catch(() => '');
-  let error = body.slice(0, 500);
+  let error = summarizeNonJsonBody(body);
   let remaining: number | undefined;
   let periodEnd: string | undefined;
   try {
@@ -125,7 +125,7 @@ export async function throwForStatus(res: Response): Promise<never> {
     if (typeof parsed.remaining === 'number') remaining = parsed.remaining;
     if (typeof parsed.period_end === 'string') periodEnd = parsed.period_end;
   } catch {
-    // non-JSON body (a CDN error page, say) — keep the raw prefix
+    // non-JSON body (a CDN error page, say) — summarized above, never dumped
   }
 
   if (res.status === 402) {
@@ -186,6 +186,22 @@ export async function throwForStatus(res: Response): Promise<never> {
     status: res.status,
     retryable: res.status >= 500,
   });
+}
+
+/**
+ * A non-JSON error body is almost always an HTML error page from the edge (Cloudflare 502/524).
+ * Show its <title> (e.g. "geoly.ai | 502: Bad gateway"), never the markup — 500 characters of
+ * `<!DOCTYPE html>` in a terminal tells the user nothing.
+ */
+export function summarizeNonJsonBody(body: string): string {
+  const trimmed = body.trim();
+  if (!trimmed) return '';
+  if (trimmed.startsWith('<')) {
+    const title = /<title>([^<]*)<\/title>/i.exec(trimmed)?.[1]?.trim();
+    return title || 'HTML error page from the edge';
+  }
+  const firstLine = trimmed.split(/\r?\n/)[0] ?? '';
+  return firstLine.length > 160 ? `${firstLine.slice(0, 159)}…` : firstLine;
 }
 
 /** Fetch with one lazy re-auth on 401, matching McpClient's behavior. */

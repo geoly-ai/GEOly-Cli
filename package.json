@@ -11,6 +11,7 @@
     "dev": "tsx src/bin.ts",
     "typecheck": "tsc --noEmit",
     "verify:run": "node --import tsx scripts/verify-run.mts",
+    "preview:chat": "node --import tsx scripts/preview-chat.mts",
     "skill:bundle": "node scripts/gen-skill-bundle.mjs",
     "verify:retry": "tsx scripts/verify-retry.mts",
     "verify:org-picker": "tsx scripts/verify-org-picker.mts",
