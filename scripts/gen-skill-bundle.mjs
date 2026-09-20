@@ -16,13 +16,21 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SRC = join(root, 'skills', 'geoly-mcp');
 const OUT = join(root, 'src', 'skill-bundle.generated.ts');
 
+/**
+ * Skill files are text; a Windows checkout (core.autocrlf) hands them to us as CRLF while the
+ * published bundle is built on Linux from LF. Normalize before embedding or hashing, or every
+ * release from Windows reads as "stale" and `init` would write CRLF copies that differ from
+ * the live ones by sha.
+ */
+const normalize = (buf) => Buffer.from(buf.toString('utf8').replace(/\r\n/g, '\n'), 'utf8');
+
 function collect(dir, base = dir) {
   const out = [];
   for (const name of readdirSync(dir).sort()) {
     const full = join(dir, name);
     if (name === 'SYNC.md') continue; // repo-only notice, not part of the published skill
     if (statSync(full).isDirectory()) out.push(...collect(full, base));
-    else out.push({ path: `geoly-mcp/${relative(base, full).split(/[\\/]/).join('/')}`, data: readFileSync(full) });
+    else out.push({ path: `geoly-mcp/${relative(base, full).split(/[\\/]/).join('/')}`, data: normalize(readFileSync(full)) });
   }
   return out;
 }

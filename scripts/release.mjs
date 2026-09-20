@@ -110,7 +110,10 @@ async function checkSkillSync() {
   const stale = [];
   for (const f of live.files ?? []) {
     const local = path.join(ROOT, 'skills', f.path);
-    const sha = fs.existsSync(local) ? crypto.createHash('sha256').update(fs.readFileSync(local)).digest('hex') : null;
+    // hash LF-normalized bytes: the live manifest is built on Linux, this checkout may be CRLF
+    const sha = fs.existsSync(local)
+      ? crypto.createHash('sha256').update(fs.readFileSync(local, 'utf8').replace(/\r\n/g, '\n')).digest('hex')
+      : null;
     if (sha !== f.sha256) stale.push(f.path);
   }
   if (stale.length) {
