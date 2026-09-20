@@ -204,36 +204,82 @@ export function summarizeNonJsonBody(body: string): string {
   return firstLine.length > 160 ? `${firstLine.slice(0, 159)}…` : firstLine;
 }
 
-/** Fetch with one lazy re-auth on 401, matching McpClient's behavior. */
-export async function authedFetch(ctx: Ctx, url: string, init: RequestInit): Promise<Response> {
+export interface HeaderDeadline {
+  /** How long the server has to answer with headers (stream open / replay / error). */
+  ms: number;
+  /** Aborts the caller's controller — the one `init.signal` belongs to. */
+  abort: () => void;
+}
+
+/**
+ * Fetch with one lazy re-auth on 401, matching McpClient's behavior.
+ *
+ * `deadline` is `--timeout` for streaming requests: it covers **only the wait for response
+ * headers** on each attempt. Not the interactive re-auth (a person may be in a browser for
+ * minutes) and not the body (a run legitimately streams for minutes — `--wait` and the idle
+ * watchdog own that). Before this, `geoly run --timeout 5` against a hung server sat there until
+ * the peer closed the socket (3m20s measured), and the flag looked like it did nothing.
+ */
+export async function authedFetch(ctx: Ctx, url: string, init: RequestInit, deadline?: HeaderDeadline): Promise<Response> {
   let token = await ensureAccessToken(ctx);
   // Caller headers (Accept for SSE, Idempotency-Key) layer on top of the auth/identity set.
   const extra = (init.headers ?? {}) as Record<string, string>;
-  let res: Response;
-  try {
-    res = await fetch(url, { ...init, headers: { ...headers(token), ...extra } });
-  } catch (err) {
-    throw new GeolyError('upstream_unavailable', `Network error: ${(err as Error).message}`, {
-      cause: err,
-      retryable: true,
-    });
-  }
+  const attempt = async (): Promise<Response> => {
+    let timedOut = false;
+    const timer = deadline
+      ? setTimeout(() => {
+          timedOut = true;
+          deadline.abort();
+        }, deadline.ms)
+      : undefined;
+    try {
+      return await fetch(url, { ...init, headers: { ...headers(token), ...extra } });
+    } catch (err) {
+      if (timedOut && deadline) {
+        throw new GeolyError('upstream_unavailable', `No response from the GEOly service within ${deadline.ms / 1000}s`, {
+          cause: err,
+          retryable: true,
+          hint: 'Raise --timeout (max 120) or check `geoly runs list` — if the server did start a run, it is there.',
+        });
+      }
+      throw networkError(err);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
+  let res = await attempt();
   if (res.status === 401) {
     await res.arrayBuffer().catch(() => undefined);
     if (ctx.staticToken || !autoAuthAllowed(ctx)) {
-      throw new GeolyError('auth_expired', 'Authentication failed (HTTP 401)', { status: 401 });
-    }
-    token = await ensureAccessToken(ctx, true);
-    try {
-      res = await fetch(url, { ...init, headers: { ...headers(token), ...extra } });
-    } catch (err) {
-      throw new GeolyError('upstream_unavailable', `Network error: ${(err as Error).message}`, {
-        cause: err,
-        retryable: true,
+      // Same words as McpClient: `geoly run` used to print a bare 401 while `geoly whoami`
+      // explained what to do — an agent that only sees `run` had no next step.
+      throw new GeolyError('auth_expired', 'Authentication failed (HTTP 401)', {
+        status: 401,
+        hint: ctx.staticToken
+          ? 'GEOLY_TOKEN was rejected — legacy tokens can no longer be created; unset it and run `geoly auth login` instead.'
+          : 'Run `geoly auth login` (use --remote on headless machines).',
+        next: ctx.staticToken ? undefined : 'geoly auth login',
       });
     }
+    token = await ensureAccessToken(ctx, true);
+    res = await attempt();
   }
   return res;
+}
+
+/**
+ * One shape for "the request never got a response". Bun appends "For more information, pass
+ * verbose: true in the second argument to fetch()" to its network errors — advice for the
+ * person compiling this binary, noise for the person running it; it is cut here.
+ */
+export function networkError(err: unknown, hint?: string): GeolyError {
+  const raw = err instanceof Error ? err.message : String(err);
+  const message = raw.replace(/\s*For more information, pass verbose: true in the second argument to fetch\(\)\.?/, '').trim();
+  return new GeolyError('upstream_unavailable', `Network error: ${message || 'request failed'}`, {
+    cause: err,
+    retryable: true,
+    hint,
+  });
 }
 
 /** The server-held half of the agent: system prompt, step budget, resolved brand. */

@@ -20,7 +20,17 @@
  *     shape through a proxy) still returns `running` with the run id — no 0ms-timer race;
  * 13. after `done`, no timers/sockets keep the process alive (the follow-up work must be able to
  *     exit immediately; a lingering 35s idle timer used to hold it);
- * 14. a replayed `failed` record exits 1 like a live failure; raw-mode replay prints the answer.
+ * 14. a replayed `failed` record exits 1 like a live failure; raw-mode replay prints the answer
+ *     (and only the answer — the run id goes to stderr, 0.3.1);
+ * 15. a server that never sends headers → upstream_unavailable inside `--timeout` (0.3.1: the
+ *     deadline used to be missing on the streaming request entirely);
+ * 16. `geoly call` rejects parameters the schema does not declare — typo, and brand/org
+ *     scoping on a single-brand token — as usage_error, before anything is sent;
+ * 17. `--context @file` decodes UTF-8 (BOM or not) and UTF-16 (BOM) and refuses other bytes;
+ * 18. a bad command line (missing positional / unknown flag / unknown subcommand) is a
+ *     usage_error on stderr with exit 2 and honours --error-format json — never stdout / exit 1;
+ * 19. a run stopped by its credit cap keeps status done / exit 0 but says so on stderr, and the
+ *     fresh receipt carries the question and max_credits the CLI knows.
  */
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -31,11 +41,13 @@ import type { Ctx } from '../src/context.js';
 import { EXIT_CODE_TABLE, GeolyError } from '../src/errors.js';
 import { McpClient, unwrapToolResult } from '../src/mcp.js';
 import { startRun, waitRun } from '../src/runs.js';
-import { emitOutcome } from '../src/commands/run.js';
+import { spawnSync } from 'node:child_process';
+import { decodeTextFile, emitOutcome } from '../src/commands/run.js';
+import { assertKnownParam } from '../src/commands/call.js';
 import { completeRemoteLogin } from '../src/oauth.js';
 import { pendingAuthPath, writeJson, credentialsPath, readJson } from '../src/config.js';
 
-type Mode = 'done' | 'slow' | 'replay' | 'fail' | 'lateStart' | 'replayFailed';
+type Mode = 'done' | 'slow' | 'replay' | 'fail' | 'lateStart' | 'replayFailed' | 'hang' | 'budget';
 let mode: Mode = 'done';
 let seenIdempotencyKey: string | undefined;
 let pollCount = 0;
@@ -63,7 +75,17 @@ const server = createServer((req, res) => {
         res.end(JSON.stringify({ run_id: 'run_replay2', status: 'failed', answer: null, error: 'MODEL_ERROR', replayed: true }));
         return;
       }
+      if (mode === 'hang') {
+        // never answers — not even headers; the socket is released when the client aborts
+        return;
+      }
       res.writeHead(200, { 'content-type': 'text/event-stream' });
+      if (mode === 'budget') {
+        res.write(sse('started', { run_id: 'run_budget1', brand: { id: 'b', name: 'Brand' }, model: 'm' }));
+        res.write(sse('done', { run_id: 'run_budget1', answer: 'could not complete', stopped: 'max_steps', stopped_reason: 'budget', credits_cost: 25, credits_remaining: 'unlimited', steps: 3 }));
+        res.end();
+        return;
+      }
       if (mode === 'lateStart') {
         res.flushHeaders(); // headers on the wire NOW; without this Node holds them until the first write
         // headers now, `started` 120ms later on its own packet — what a CDN hop looks like
@@ -275,7 +297,99 @@ async function main(): Promise<void> {
   } finally {
     (process.stdout as unknown as { write: typeof origWrite }).write = origWrite;
   }
-  check('14b raw replay prints the answer then the run id', out.join('') === 'earlier answer\nrun_replay1\n', JSON.stringify(out.join('')));
+  check('14b raw replay prints the answer only (run id on stderr)', out.join('') === 'earlier answer\n', JSON.stringify(out.join('')));
+
+  // 15. no headers within --timeout → exit 6 inside the deadline, not when the peer gives up
+  mode = 'hang';
+  const tHang = Date.now();
+  let hangKind = 'none';
+  try {
+    await startRun({ ...ctx, timeoutMs: 400 }, req, { waitMs: 5_000 });
+  } catch (err) {
+    hangKind = err instanceof GeolyError ? `${err.kind}:${err.exitCode}` : String(err);
+  }
+  const hangMs = Date.now() - tHang;
+  check('15 hung server → upstream_unavailable exit 6 within --timeout', hangKind === 'upstream_unavailable:6' && hangMs < 2_000, `${hangKind} after ${hangMs}ms`);
+
+  // 16. undeclared call parameters are usage errors
+  const schemaTool = { name: 'get_brand_overview', inputSchema: { type: 'object', properties: { time_range: { type: 'string' }, platform: { type: 'string' } } } };
+  const paramErr = (name: string): GeolyError | undefined => {
+    try {
+      assertKnownParam(schemaTool, name, schemaTool.inputSchema.properties as Record<string, Record<string, unknown>>, '--');
+      return undefined;
+    } catch (err) {
+      return err instanceof GeolyError ? err : undefined;
+    }
+  };
+  const typo = paramErr('time-range');
+  check('16a typo → usage_error naming the declared parameter', typo?.kind === 'usage_error' && /--time_range/.test(typo.hint ?? ''), typo?.hint);
+  const brandErr = paramErr('brand_id');
+  check('16b brand_id on a single-brand token → usage_error that explains the token', brandErr?.kind === 'usage_error' && /bound to one brand/.test(brandErr.message), brandErr?.message);
+  check('16c declared parameter passes', paramErr('platform') === undefined);
+  const anyTool = { name: 'free_form', inputSchema: { type: 'object', properties: {} } };
+  let openOk = true;
+  try {
+    assertKnownParam(anyTool, 'whatever', {}, '--');
+  } catch {
+    openOk = false;
+  }
+  check('16d schema without properties accepts anything', openOk);
+
+  // 17. --context file decoding
+  const ctxText = 'order_ref: 青龙-7731';
+  const utf16 = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(ctxText, 'utf16le')]);
+  const utf8bom = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(ctxText, 'utf8')]);
+  check('17a UTF-16LE BOM decoded', decodeTextFile(utf16, 'a') === ctxText);
+  check('17b UTF-8 BOM stripped', decodeTextFile(utf8bom, 'b') === ctxText);
+  check('17c plain UTF-8 untouched', decodeTextFile(Buffer.from(ctxText, 'utf8'), 'c') === ctxText);
+  let gbkKind = 'none';
+  try {
+    decodeTextFile(Buffer.from([0xcb, 0xb5, 0xc3, 0xf7, 0x2d, 0x37]), 'gbk.txt');
+  } catch (err) {
+    gbkKind = err instanceof GeolyError ? err.kind : String(err);
+  }
+  check('17d non-UTF-8 bytes refused as usage_error', gbkKind === 'usage_error', gbkKind);
+
+  // 18. command-line parse errors: stderr, exit 2, json when asked
+  const bin = path.join(process.cwd(), 'src', 'bin.ts');
+  const runBin = (args: string[]) => spawnSync(process.execPath, ['--import', 'tsx', bin, ...args], { encoding: 'utf8', env: { ...process.env, GEOLY_NO_AUTO_AUTH: '1' } });
+  const noArg = runBin(['run']);
+  check('18a missing positional → exit 2, stdout empty, usage_error on stderr', noArg.status === 2 && noArg.stdout === '' && /usage_error/.test(noArg.stderr), `status=${noArg.status} stdout=${JSON.stringify(noArg.stdout)} stderr=${noArg.stderr.trim()}`);
+  const badFlag = runBin(['runs', 'list', '--json', '--error-format', 'json']);
+  let badFlagJson: { kind?: string } | undefined;
+  try {
+    badFlagJson = JSON.parse(badFlag.stderr.trim()) as { kind?: string };
+  } catch {
+    badFlagJson = undefined;
+  }
+  check('18b unknown flag + --error-format json → JSON usage_error on stderr, exit 2', badFlag.status === 2 && badFlagJson?.kind === 'usage_error', `status=${badFlag.status} stderr=${badFlag.stderr.trim()}`);
+
+  // 19. budget stop: done / exit 0, stderr says partial, receipt carries what the CLI knows
+  mode = 'budget';
+  const budgetRun = await startRun(ctx, req, { waitMs: 5_000, idempotencyKey: 'e'.repeat(16) });
+  const stdoutParts: string[] = [];
+  const stderrParts: string[] = [];
+  const ow = process.stdout.write.bind(process.stdout);
+  const ew = process.stderr.write.bind(process.stderr);
+  (process.stdout as unknown as { write: (s: string) => boolean }).write = (s: string) => {
+    stdoutParts.push(String(s));
+    return true;
+  };
+  (process.stderr as unknown as { write: (s: string) => boolean }).write = (s: string) => {
+    stderrParts.push(String(s));
+    return true;
+  };
+  let budgetCode = -1;
+  try {
+    budgetCode = await emitOutcome(ctx, budgetRun, { save: false, streamed: false, known: { question: 'q?', max_credits: 25 } });
+  } finally {
+    (process.stdout as unknown as { write: typeof ow }).write = ow;
+    (process.stderr as unknown as { write: typeof ew }).write = ew;
+  }
+  const budgetReceipt = JSON.parse(stdoutParts.join('')) as Record<string, unknown>;
+  check('19a budget stop stays done / exit 0', budgetCode === 0 && budgetReceipt.status === 'done' && budgetReceipt.stopped_reason === 'budget');
+  check('19b stderr calls the answer partial', /credit cap/.test(stderrParts.join('')), stderrParts.join('').trim());
+  check('19c fresh receipt carries question and max_credits', budgetReceipt.question === 'q?' && budgetReceipt.max_credits === 25, JSON.stringify(Object.keys(budgetReceipt)));
 
   // 11. README mirrors the exit-code table (single source: errors.ts)
   const readme = fs.readFileSync(path.join(process.cwd(), 'README.md'), 'utf8');

@@ -8,6 +8,7 @@
  * the host how to use all of it.
  */
 import { Builtins, Cli } from 'clipanion';
+import { EXIT } from './errors.js';
 import { AskCommand } from './commands/ask.js';
 import { AuthLoginCommand, AuthLogoutCommand, AuthStatusCommand } from './commands/auth.js';
 import { CallCommand } from './commands/call.js';
@@ -59,4 +60,34 @@ cli.register(CompletionsCommand);
 cli.register(Builtins.HelpCommand);
 cli.register(Builtins.VersionCommand);
 
-cli.runExit(process.argv.slice(2));
+/**
+ * Parse first, run second. clipanion's own handling of a bad command line — unknown flag,
+ * missing positional, unknown subcommand — prints the usage to **stdout** with exit 1, which a
+ * script reads as "success with odd output" and which ignores `--error-format json`. Every
+ * error the CLI raises itself is a `usage_error` on stderr with exit 2; make these the same.
+ */
+const argv = process.argv.slice(2);
+let command;
+try {
+  command = cli.process(argv);
+} catch (err) {
+  const raw = err instanceof Error ? err.message : String(err);
+  // clipanion's message: one sentence, then the usage line(s) it thinks you meant.
+  const [sentence, ...rest] = raw.split('\n');
+  // Keep the command shape, drop the wall of optional flags — `--help` has those.
+  const usageLines = rest
+    .map((l) => l.trim())
+    .filter((l) => l.startsWith('$ '))
+    .map((l) => l.slice(2).replace(/\s*\[[^\]]*\]/g, '').trim());
+  const message = (sentence ?? raw).replace(/\.$/, '');
+  const hint = usageLines.length ? `Usage: ${usageLines.join(' | ')} — run it with --help for flags.` : 'See `geoly --help`.';
+  const wantJson = argv.includes('--error-format=json') || argv[argv.indexOf('--error-format') + 1] === 'json';
+  process.stderr.write(
+    wantJson
+      ? `${JSON.stringify({ kind: 'usage_error', message, hint })}\n`
+      : `error[usage_error]: ${message}\n  hint: ${hint}\n`,
+  );
+  process.exit(EXIT.usage ?? 2);
+}
+
+cli.runExit(command);

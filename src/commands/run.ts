@@ -35,7 +35,13 @@ const RUN_ID_RE = /^run_[A-Za-z0-9_-]{6,}$/;
 export async function emitOutcome(
   ctx: Ctx,
   outcome: RunOutcome,
-  opts: { save: boolean; outFile?: string; streamed: boolean },
+  opts: {
+    save: boolean;
+    outFile?: string;
+    streamed: boolean;
+    /** What the CLI itself knows about the request — the live `done` event does not echo it. */
+    known?: { question?: string; max_credits?: number };
+  },
 ): Promise<number> {
   if (outcome.kind === 'running') {
     const next = `geoly runs wait ${outcome.runId}`;
@@ -67,24 +73,50 @@ export async function emitOutcome(
     );
   }
   // Normalized status wins over the record's raw one (`succeeded` → `done`): one vocabulary everywhere.
+  // The live `done` event carries no question / max_credits (the server assumes you know what
+  // you asked); a lookup does. Fill them from the request so a script parsing receipts sees one
+  // key set whether the run finished now or is read back later.
   const result: Record<string, unknown> = { ...record, status: st };
+  if (opts.known?.question !== undefined && result.question === undefined) result.question = opts.known.question;
+  if (opts.known?.max_credits !== undefined && result.max_credits === undefined) result.max_credits = opts.known.max_credits;
+  // `stopped: max_steps` means the agent did not finish on its own terms — a budget cap
+  // (`stopped_reason: budget`) usually leaves a placeholder answer. `status` stays `done` and the
+  // exit code 0 (nothing failed, credits were spent), but say so where an agent will read it.
+  if (result.stopped === 'max_steps') {
+    const reason = typeof result.stopped_reason === 'string' ? result.stopped_reason : 'max_steps';
+    warn(
+      reason === 'budget'
+        ? `geoly: run ${runId ?? ''} stopped at its credit cap (${String(result.credits_cost ?? '?')} credits) — the answer is partial; raise --max-credits to finish it`
+        : `geoly: run ${runId ?? ''} stopped early (${reason}) — treat the answer as partial (see \`stopped\` in the receipt)`,
+    );
+  }
   // `-o` always means "write it there" — it wins over --no-save (review #6).
   const wantSave = opts.save || !!opts.outFile;
   let saved: string | undefined;
   if (wantSave && runId) {
-    saved = saveReceipt(runId, result, opts.outFile);
-    if (saved) result.saved_to = saved;
-    else if (opts.outFile) warn(`geoly: could not write ${opts.outFile} — printing the receipt to stdout instead`);
+    const attempt = saveReceipt(runId, result, opts.outFile);
+    if (attempt.path) {
+      saved = attempt.path;
+      result.saved_to = saved;
+    } else if (opts.outFile) {
+      warn(`geoly: could not write ${opts.outFile} (${attempt.reason}) — printing the receipt to stdout instead`);
+    } else {
+      // The default location is the cwd; a read-only one used to drop the file with no trace.
+      warn(`geoly: receipt not saved to ./.geoly/runs/ (${attempt.reason}); pass -o <file> or --no-save`);
+    }
   }
   if (opts.streamed) {
-    // The answer already went to stdout as text; finish with a bare run id for reference.
-    process.stdout.write(`\n${runId ?? ''}\n`);
+    // The answer already went to stdout as text; the run id goes to stderr so `> answer.md`
+    // holds only the answer (it used to end with a bare run id line).
+    process.stdout.write('\n');
+    status(ctx, `· run ${runId ?? '?'} · ${st}`);
     return 0;
   }
   if (ctx.output === 'raw') {
     // Raw mode without a live stream (replay / poll / lookup): the answer was never shown — show it (review #5).
     const answer = typeof record.answer === 'string' ? record.answer : '';
-    process.stdout.write(`${answer}${answer.endsWith('\n') || !answer ? '' : '\n'}${runId ?? ''}\n`);
+    process.stdout.write(`${answer}${answer.endsWith('\n') || !answer ? '' : '\n'}`);
+    status(ctx, `· run ${runId ?? '?'} · ${st}`);
     return 0;
   }
   if (opts.outFile && saved) {
@@ -95,15 +127,16 @@ export async function emitOutcome(
   return 0;
 }
 
-/** `./.geoly/runs/<run_id>.json` (or an explicit path). Returns the path written, or undefined. */
-function saveReceipt(runId: string, result: Record<string, unknown>, outFile?: string): string | undefined {
+/** `./.geoly/runs/<run_id>.json` (or an explicit path). The receipt on stdout is the contract; the file is a convenience. */
+function saveReceipt(runId: string, result: Record<string, unknown>, outFile?: string): { path?: string; reason?: string } {
   try {
     const target = outFile ? path.resolve(outFile) : path.join(runsDir(), `${runId}.json`);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, `${JSON.stringify(result, null, 2)}\n`, { mode: 0o600 });
-    return outFile ? target : path.relative(process.cwd(), target).split(path.sep).join('/');
-  } catch {
-    return undefined; // the receipt on stdout is the contract; the file is a convenience
+    return { path: outFile ? target : path.relative(process.cwd(), target).split(path.sep).join('/') };
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    return { reason: code ?? (err instanceof Error ? err.message : String(err)) };
   }
 }
 
@@ -176,7 +209,7 @@ ${renderExitCodeTable()}
   wait = Option.String('--wait', { description: `Seconds to follow before handing off (default ${DEFAULT_WAIT_S})` });
   noWait = Option.Boolean('--no-wait', false, { description: 'Return as soon as the server acknowledges the run' });
   noSave = Option.Boolean('--no-save', false, { description: 'Do not write the receipt to ./.geoly/runs/' });
-  outFile = Option.String('-o,--out', { description: 'Write the receipt to this file; stdout only prints its path' });
+  outFile = Option.String('-o,--out', { description: 'Write the receipt to this file; stdout then prints only {status, run_id, saved_to}' });
   idempotencyKey = Option.String('--idempotency-key', { description: 'Override the key used to de-duplicate retries' });
 
   protected async run(ctx: Ctx): Promise<number> {
@@ -209,6 +242,7 @@ ${renderExitCodeTable()}
     }
 
     const streamed = ctx.output === 'raw';
+    const known = { question: req.question, max_credits: req.maxCredits };
     const outcome = await startRun(ctx, req, {
       waitMs,
       idempotencyKey: this.idempotencyKey ?? idempotencyKeyFor(ctx, req),
@@ -221,7 +255,7 @@ ${renderExitCodeTable()}
         describeEvent(ctx, ev);
       },
     });
-    return emitOutcome(ctx, outcome, outputOpts);
+    return emitOutcome(ctx, outcome, { ...outputOpts, known });
   }
 }
 
@@ -238,9 +272,35 @@ export function resolveWaitMs(wait: string | undefined, noWait: boolean): number
 function readContext(value: string): string {
   if (!value.startsWith('@')) return value;
   const file = value.slice(1);
+  let bytes: Buffer;
   try {
-    return fs.readFileSync(file, 'utf8');
+    bytes = fs.readFileSync(file);
   } catch (err) {
     throw new GeolyError('usage_error', `Could not read --context file: ${file}`, { cause: err });
+  }
+  return decodeTextFile(bytes, file);
+}
+
+/**
+ * Text files reach us in whatever encoding the user's shell wrote them: Windows PowerShell 5.1
+ * `Out-File` is UTF-16LE with a BOM, `Out-File -Encoding utf8` keeps a UTF-8 BOM, `Set-Content`
+ * follows the system code page (GBK on a Chinese machine). Reading all of that as UTF-8 handed
+ * the agent `R\uFFFD\uFFFD\uFFFD-7731` and charged for it. Honour the BOMs; refuse bytes that are not
+ * valid UTF-8 rather than guess a code page.
+ */
+export function decodeTextFile(bytes: Buffer, file: string): string {
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) return bytes.subarray(2).toString('utf16le');
+  if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) {
+    const swapped = Buffer.from(bytes.subarray(2));
+    swapped.swap16();
+    return swapped.toString('utf16le');
+  }
+  const body = bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf ? bytes.subarray(3) : bytes;
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(body);
+  } catch {
+    throw new GeolyError('usage_error', `--context file is not UTF-8 text: ${file}`, {
+      hint: 'Save it as UTF-8 (PowerShell: `Set-Content -Encoding utf8`; the default Out-File on Windows PowerShell 5.1 writes UTF-16).',
+    });
   }
 }

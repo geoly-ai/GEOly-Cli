@@ -66,6 +66,10 @@ going on the server; run the `next` command to pick it up. The full receipt is a
 `./.geoly/runs/<run_id>.json` (add `.geoly/` to your `.gitignore`). Re-running the exact same
 command within 10 minutes replays the same run instead of paying for a new one.
 
+**Read `stopped`, not only `status`.** A run that hit its `--max-credits` cap comes back
+`status: done`, `stopped: max_steps`, `stopped_reason: budget` with a placeholder answer —
+nothing failed, so the exit code is 0, but the CLI says on stderr that the answer is partial.
+
 ## Built for agents
 
 - **Stable contract**: flags, output behavior, and exit codes are the stable surface.

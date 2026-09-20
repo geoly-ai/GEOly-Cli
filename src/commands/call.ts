@@ -196,9 +196,67 @@ export function buildArguments(parsed: ParsedCall, tool: ToolInfo): Record<strin
 
   const props = (tool.inputSchema?.properties ?? {}) as Record<string, Record<string, unknown>>;
   for (const [name, raw] of parsed.params) {
+    assertKnownParam(tool, name, props, '--');
     base[name] = coerce(name, raw, props[name]);
   }
+  for (const name of Object.keys(base)) assertKnownParam(tool, name, props, '');
   return base;
+}
+
+/**
+ * A parameter the schema does not declare is a usage error, not a pass-through.
+ *
+ * The server drops unknown keys silently, so before this `--time-range 7d` (hyphen) ran the
+ * default 30-day window, `--brand_id <other org's brand>` on a single-brand token returned the
+ * default brand's numbers, and `--nope 1` cost credits — all exit 0, all wrong data. The schema
+ * is already in hand (`geoly schema <tool>` prints it), so the check is free.
+ */
+export function assertKnownParam(
+  tool: ToolInfo,
+  name: string,
+  props: Record<string, Record<string, unknown>>,
+  prefix: '--' | '',
+): void {
+  const known = Object.keys(props);
+  // No schema at all (a tool that takes anything) — nothing to check against.
+  if (known.length === 0 || tool.inputSchema?.additionalProperties === true) return;
+  if (name in props) return;
+  const where = prefix ? `${prefix}${name}` : `"${name}" in --data/--input`;
+  // brand/org scoping deserves its own words: the parameter is missing *because of the token*,
+  // not because the tool never had it.
+  if (name === 'brand' || name === 'brand_id' || name === 'org_id') {
+    if (name === 'brand' && 'brand_id' in props) {
+      throw new GeolyError('usage_error', `${where} is not a parameter of ${tool.name}; the schema name is brand_id`, {
+        hint: `geoly call ${tool.name} --brand_id <id> …`,
+      });
+    }
+    throw new GeolyError(
+      'usage_error',
+      `${where} is not a parameter of ${tool.name} for this token — it is bound to one brand, so the call would silently run against that brand`,
+      {
+        hint:
+          name === 'org_id'
+            ? 'Switch organization with the global --org <org_id> flag instead.'
+            : 'Use --org <org_id> to switch organization; multi-brand tokens expose brand_id on every brand tool (see `geoly schema ' + tool.name + '`).',
+      },
+    );
+  }
+  throw new GeolyError('usage_error', `${where} is not a parameter of ${tool.name}`, {
+    hint: suggestParam(name, known) ?? `Parameters: ${known.map((k) => `--${k}`).join(', ')}. \`geoly schema ${tool.name}\` shows types.`,
+  });
+}
+
+/** Nearest declared parameter for a typo (`time-range` → `time_range`, `platfrom` → `platform`). */
+function suggestParam(input: string, names: string[]): string | undefined {
+  const needle = input.toLowerCase().replace(/-/g, '_');
+  const close = names.filter((n) => n === needle || n.includes(needle) || needle.includes(n) || sharedPrefix(n, needle) >= 4);
+  return close.length ? `Did you mean --${close[0]}? Declared parameters: ${names.map((k) => `--${k}`).join(', ')}.` : undefined;
+}
+
+function sharedPrefix(a: string, b: string): number {
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i += 1;
+  return i;
 }
 
 /** Coerce a raw CLI token to the schema-declared type. */

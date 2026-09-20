@@ -87,12 +87,13 @@ export async function startRun(
   const abort = (): void => controller.abort();
   opts.signal?.addEventListener('abort', abort, { once: true });
 
-  const res = await authedFetch(ctx, apiUrl(ctx, '/api/agent/runs'), {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-    signal: controller.signal,
-  });
+  // `--timeout` = headers deadline (see authedFetch); the stream itself is bounded by `--wait`.
+  const res = await authedFetch(
+    ctx,
+    apiUrl(ctx, '/api/agent/runs'),
+    { method: 'POST', headers, body: JSON.stringify(body), signal: controller.signal },
+    { ms: ctx.timeoutMs, abort },
+  );
   if (!res.ok) await throwForStatus(res);
 
   // Replay: the server short-circuited to JSON (see Idempotency-Key in the route contract).
