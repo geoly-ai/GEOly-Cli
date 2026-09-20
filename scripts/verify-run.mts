@@ -15,7 +15,12 @@
  *  8. in-band GUARDED_RATE_LIMITED → one retry after retry_after_seconds, then the real result;
  *  9. TOOL_TIMEOUT tail → upstream_unavailable with retryAfter (via unwrapToolResult);
  * 10. paste-code completion → `--code` exchanges with the parked verifier and stores tokens;
- * 11. README's exit-code block equals errors.ts EXIT_CODE_TABLE (docs drift gate).
+ * 11. README's exit-code block equals errors.ts EXIT_CODE_TABLE (docs drift gate);
+ * 12. `--no-wait` when the server sends headers first and `started` on a later packet (the real
+ *     shape through a proxy) still returns `running` with the run id — no 0ms-timer race;
+ * 13. after `done`, no timers/sockets keep the process alive (the follow-up work must be able to
+ *     exit immediately; a lingering 35s idle timer used to hold it);
+ * 14. a replayed `failed` record exits 1 like a live failure; raw-mode replay prints the answer.
  */
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -26,10 +31,11 @@ import type { Ctx } from '../src/context.js';
 import { EXIT_CODE_TABLE, GeolyError } from '../src/errors.js';
 import { McpClient, unwrapToolResult } from '../src/mcp.js';
 import { startRun, waitRun } from '../src/runs.js';
+import { emitOutcome } from '../src/commands/run.js';
 import { completeRemoteLogin } from '../src/oauth.js';
 import { pendingAuthPath, writeJson, credentialsPath, readJson } from '../src/config.js';
 
-type Mode = 'done' | 'slow' | 'replay' | 'fail';
+type Mode = 'done' | 'slow' | 'replay' | 'fail' | 'lateStart' | 'replayFailed';
 let mode: Mode = 'done';
 let seenIdempotencyKey: string | undefined;
 let pollCount = 0;
@@ -52,7 +58,22 @@ const server = createServer((req, res) => {
         res.end(JSON.stringify({ run_id: 'run_replay1', status: 'succeeded', answer: 'earlier answer', replayed: true }));
         return;
       }
+      if (mode === 'replayFailed') {
+        res.writeHead(200, { 'content-type': 'application/json', 'idempotent-replayed': 'true' });
+        res.end(JSON.stringify({ run_id: 'run_replay2', status: 'failed', answer: null, error: 'MODEL_ERROR', replayed: true }));
+        return;
+      }
       res.writeHead(200, { 'content-type': 'text/event-stream' });
+      if (mode === 'lateStart') {
+        res.flushHeaders(); // headers on the wire NOW; without this Node holds them until the first write
+        // headers now, `started` 120ms later on its own packet — what a CDN hop looks like
+        setTimeout(() => {
+          res.write(sse('started', { run_id: 'run_late001', brand: { id: 'b', name: 'Brand' }, model: 'm' }));
+          const t = setInterval(() => res.write(sse('heartbeat', {})), 200);
+          res.on('close', () => clearInterval(t)); // res, not req: IncomingMessage 'close' fires once the body is consumed, before the socket goes
+        }, 120);
+        return;
+      }
       res.write(sse('started', { run_id: 'run_test001', brand: { id: 'b', name: 'Brand' }, model: 'm' }));
       res.write(sse('step', { index: 1 }));
       if (mode === 'fail') {
@@ -63,7 +84,7 @@ const server = createServer((req, res) => {
       if (mode === 'slow') {
         // keep the stream open with heartbeats; the client must give up on its own budget
         const t = setInterval(() => res.write(sse('heartbeat', {})), 200);
-        req.on('close', () => clearInterval(t));
+        res.on('close', () => clearInterval(t)); // res, not req: IncomingMessage 'close' fires once the body is consumed, before the socket goes
         return;
       }
       res.write(sse('text', { delta: 'hello' }));
@@ -113,6 +134,10 @@ const server = createServer((req, res) => {
 let failures = 0;
 function check(name: string, ok: boolean, detail = ''): void {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? ` — ${detail}` : ''}`);
+  if (process.env.VERIFY_TRACE_TIMERS) {
+    const t = (process as unknown as { getActiveResourcesInfo: () => string[] }).getActiveResourcesInfo().filter((r) => r === 'Timeout').length;
+    console.log(`      [timers=${t}]`);
+  }
   if (!ok) failures += 1;
 }
 
@@ -208,6 +233,49 @@ async function main(): Promise<void> {
   const stored = readJson<{ tokens?: { accessToken?: string } }>(credentialsPath('verify'));
   check('10 --code exchanged with parked verifier', tokenExchanges[0]?.code === 'CODE123' && tokenExchanges[0]?.code_verifier === 'v'.repeat(43) && tokenExchanges[0]?.redirect_uri === `${origin}/api/mcp/cli/code`);
   check('10 tokens stored, pending cleared', tokens.accessToken === 'tok_remote' && stored?.tokens?.accessToken === 'tok_remote' && !fs.existsSync(pendingAuthPath('verify')));
+
+  // 12. --no-wait must survive `started` arriving after the headers
+  mode = 'lateStart';
+  const late = await startRun(ctx, req, { waitMs: 0 });
+  check('12 --no-wait returns running when started arrives on a later packet', late.kind === 'running' && late.runId === 'run_late001', JSON.stringify(late));
+
+  // 13. nothing left ticking after a normal completion
+  mode = 'done';
+  await startRun(ctx, req, { waitMs: 5_000 });
+  // timers live outside _getActiveHandles; getActiveResourcesInfo lists them as 'Timeout'.
+  // Let the mock server's own `close` handlers (heartbeat intervals from the slow/lateStart modes)
+  // run first — only client-side leftovers are the subject here.
+  await new Promise((r) => setTimeout(r, 300));
+  const resources = (process as unknown as { getActiveResourcesInfo: () => string[] }).getActiveResourcesInfo();
+  const timers = resources.filter((r) => r === 'Timeout').length;
+  check('13 no lingering client timers after done', timers === 0, `active resources: ${resources.join(',')}`);
+
+  // 14a. replayed failure exits 1 (emitOutcome throws tool_error)
+  mode = 'replayFailed';
+  const failedReplay = await startRun(ctx, req, { waitMs: 5_000, idempotencyKey: 'c'.repeat(16) });
+  let exitKind = 'none';
+  try {
+    await emitOutcome(ctx, failedReplay, { save: false, streamed: false });
+  } catch (err) {
+    exitKind = err instanceof GeolyError ? `${err.kind}:${err.exitCode}` : String(err);
+  }
+  check('14a replayed failed → tool_error exit 1', exitKind === 'tool_error:1', exitKind);
+
+  // 14b. raw mode + replay prints the answer (stdout capture)
+  mode = 'replay';
+  const raw = await startRun(ctx, req, { waitMs: 5_000, idempotencyKey: 'd'.repeat(16) });
+  const out: string[] = [];
+  const origWrite = process.stdout.write.bind(process.stdout);
+  (process.stdout as unknown as { write: (s: string) => boolean }).write = (s: string) => {
+    out.push(String(s));
+    return true;
+  };
+  try {
+    await emitOutcome({ ...ctx, output: 'raw' }, raw, { save: false, streamed: false });
+  } finally {
+    (process.stdout as unknown as { write: typeof origWrite }).write = origWrite;
+  }
+  check('14b raw replay prints the answer then the run id', out.join('') === 'earlier answer\nrun_replay1\n', JSON.stringify(out.join('')));
 
   // 11. README mirrors the exit-code table (single source: errors.ts)
   const readme = fs.readFileSync(path.join(process.cwd(), 'README.md'), 'utf8');

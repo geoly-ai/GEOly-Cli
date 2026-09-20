@@ -18,7 +18,7 @@ import { Command, Option } from 'clipanion';
 import { runsDir } from '../config.js';
 import { Ctx } from '../context.js';
 import { GeolyError, renderExitCodeTable } from '../errors.js';
-import { printResult, status } from '../output.js';
+import { printResult, status, warn } from '../output.js';
 import { RunEvent, RunOutcome, RunRequest, idempotencyKeyFor, normalizeStatus, startRun, waitRun } from '../runs.js';
 import { GeolyCommand } from './base.js';
 
@@ -27,7 +27,11 @@ export const DEFAULT_WAIT_S = 100;
 export const DEFAULT_POLL_INTERVAL_S = 3;
 const RUN_ID_RE = /^run_[A-Za-z0-9_-]{6,}$/;
 
-/** Shared by `run`, `runs wait`: render one outcome to stdout/stderr and return the exit code. */
+/**
+ * Shared by `run`, `runs wait`: render one outcome to stdout/stderr and return the exit code.
+ * `opts.streamed` = the answer text was already streamed to stdout (raw mode following SSE);
+ * for a replay / poll result in raw mode the answer has not been shown yet and is printed here.
+ */
 export async function emitOutcome(
   ctx: Ctx,
   outcome: RunOutcome,
@@ -53,19 +57,38 @@ export async function emitOutcome(
   if (st === 'running' && runId) {
     return emitOutcome(ctx, { kind: 'running', runId, elapsedS: 0 }, opts);
   }
+  // A replayed failure is still a failure: same exit code as the live `error` event (review #4),
+  // so a script that branches on $? sees the same thing whether the run failed now or 5 minutes ago.
+  if (st === 'failed') {
+    return emitOutcome(
+      ctx,
+      { kind: 'failed', runId, code: 'RUN_FAILED', message: String(record.error ?? 'run failed') },
+      opts,
+    );
+  }
   // Normalized status wins over the record's raw one (`succeeded` → `done`): one vocabulary everywhere.
   const result: Record<string, unknown> = { ...record, status: st };
-  if (opts.save && runId) {
-    const saved = saveReceipt(runId, result, opts.outFile);
+  // `-o` always means "write it there" — it wins over --no-save (review #6).
+  const wantSave = opts.save || !!opts.outFile;
+  let saved: string | undefined;
+  if (wantSave && runId) {
+    saved = saveReceipt(runId, result, opts.outFile);
     if (saved) result.saved_to = saved;
+    else if (opts.outFile) warn(`geoly: could not write ${opts.outFile} — printing the receipt to stdout instead`);
   }
   if (opts.streamed) {
     // The answer already went to stdout as text; finish with a bare run id for reference.
     process.stdout.write(`\n${runId ?? ''}\n`);
     return 0;
   }
-  if (opts.outFile) {
-    printResult(ctx, { status: st, run_id: runId, saved_to: result.saved_to });
+  if (ctx.output === 'raw') {
+    // Raw mode without a live stream (replay / poll / lookup): the answer was never shown — show it (review #5).
+    const answer = typeof record.answer === 'string' ? record.answer : '';
+    process.stdout.write(`${answer}${answer.endsWith('\n') || !answer ? '' : '\n'}${runId ?? ''}\n`);
+    return 0;
+  }
+  if (opts.outFile && saved) {
+    printResult(ctx, { status: st, run_id: runId, saved_to: saved });
     return 0;
   }
   printResult(ctx, result);

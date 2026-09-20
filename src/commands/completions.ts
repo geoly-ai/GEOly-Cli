@@ -5,7 +5,7 @@ import { GeolyError } from '../errors.js';
 import { printText } from '../output.js';
 import { GeolyCommand } from './base.js';
 
-const SUBCOMMANDS = ['auth', 'whoami', 'tools', 'schema', 'call', 'upgrade', 'completions'];
+const SUBCOMMANDS = ['init', 'run', 'runs', 'credits', 'ask', 'auth', 'whoami', 'tools', 'schema', 'call', 'upgrade', 'completions'];
 
 export class CompletionsCommand extends GeolyCommand {
   static paths = [['completions']];
@@ -27,6 +27,8 @@ export class CompletionsCommand extends GeolyCommand {
           `    COMPREPLY=( \$(compgen -W "${SUBCOMMANDS.join(' ')}" -- "\$cur") )`,
           `  elif [ "\${COMP_WORDS[1]}" = "auth" ] && [ "\$COMP_CWORD" -eq 2 ]; then`,
           `    COMPREPLY=( \$(compgen -W "login status logout" -- "\$cur") )`,
+          `  elif [ "\${COMP_WORDS[1]}" = "runs" ] && [ "\$COMP_CWORD" -eq 2 ]; then`,
+          `    COMPREPLY=( \$(compgen -W "wait list" -- "\$cur") )`,
           `  fi`,
           `}`,
           `complete -F _geoly_completions geoly`,
@@ -45,6 +47,8 @@ export class CompletionsCommand extends GeolyCommand {
           `    _describe 'command' subcmds`,
           `  elif [[ \$words[2] == auth && CURRENT -eq 3 ]]; then`,
           `    local -a auth; auth=('login' 'status' 'logout'); _describe 'auth' auth`,
+          `  elif [[ \$words[2] == runs && CURRENT -eq 3 ]]; then`,
+          `    local -a runs; runs=('wait' 'list'); _describe 'runs' runs`,
           `  fi`,
           `}`,
           `_geoly "\$@"`,

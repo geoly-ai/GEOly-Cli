@@ -72,6 +72,10 @@ function saveCredentials(ctx: Ctx, creds: CredentialsFile): void {
 
 export function clearCredentials(ctx: Ctx): void {
   removeFile(credentialsPath(ctx.profile));
+  // A parked remote sign-in belongs to the client registration that just went away with the
+  // credentials file; keeping it would send the user through a login whose code can't be
+  // exchanged (review #8).
+  removeFile(pendingAuthPath(ctx.profile));
 }
 
 function tokenFresh(tokens: StoredTokens | undefined): tokens is StoredTokens {
@@ -162,7 +166,14 @@ export async function startRemoteLogin(ctx: Ctx): Promise<RemoteLoginStart> {
   // A sign-in started minutes ago by another command is still perfectly good: show its URL
   // again rather than registering a fresh client and orphaning the first pending state.
   const existing = readJson<PendingAuthFile>(pendingAuthPath(ctx.profile));
-  if (existing && existing.origin === endpointOrigin(ctx) && existing.expiresAt > Date.now() && existing.authorizeUrl) {
+  const currentClientId = loadCredentials(ctx)?.client?.clientId;
+  if (
+    existing &&
+    existing.origin === endpointOrigin(ctx) &&
+    existing.expiresAt > Date.now() &&
+    existing.authorizeUrl &&
+    existing.clientId === currentClientId // a pending for a client we no longer hold can't be completed
+  ) {
     printRemoteInstructions(existing.authorizeUrl);
     return { authorizeUrl: existing.authorizeUrl, redirectUri: existing.redirectUri };
   }

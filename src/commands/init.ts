@@ -10,7 +10,7 @@
 import { Command, Option } from 'clipanion';
 import { Ctx } from '../context.js';
 import { GeolyError } from '../errors.js';
-import { ensureAccessToken, loadCredentials } from '../oauth.js';
+import { ensureAccessToken, loadCredentials, shouldUseRemoteFlow, startRemoteLogin } from '../oauth.js';
 import { printResult, status, warn } from '../output.js';
 import { AGENT_HOSTS, AgentHost, InstallResult, detectHosts, installSkill, loadSkillBundle } from '../skills.js';
 import { GeolyCommand } from './base.js';
@@ -41,40 +41,51 @@ export class InitCommand extends GeolyCommand {
       throw new GeolyError('usage_error', `--agent must be one of ${AGENT_HOSTS.map((h) => h.id).join(', ')}`);
     }
 
-    // 1. Sign-in (lazy auth would do it on first use, but init is where a person expects it).
-    let signedIn = false;
-    if (!this.noLogin) {
-      await ensureAccessToken(ctx);
-      signedIn = true;
-      status(ctx, `· signed in (profile "${ctx.profile}")`);
-    } else if (!ctx.staticToken && !loadCredentials(ctx)?.tokens) {
-      warn('geoly: not signed in — run `geoly auth login` before the first `geoly run`');
-    }
-
-    // 2. Skill bundle: live if reachable, embedded otherwise.
+    // 1. Skills first: they never depend on being signed in, and on a machine without a browser
+    //    sign-in is a two-step affair — the skills must not be held hostage by it (review #9).
     const bundle = await loadSkillBundle(ctx);
     status(ctx, `· skill geoly-mcp ${bundle.version} (${bundle.source === 'live' ? 'from app.geoly.ai' : 'embedded copy — live bundle not reachable'})`);
-
-    // 3. Hosts.
     const hosts = detectHosts(only);
+    const installed: InstallResult[] = [];
     if (!hosts.length) {
       warn('geoly: no agent host found (looked for ~/.claude, ~/.codex, ~/.cursor) — nothing installed');
-      printResult(ctx, { signedIn, skillVersion: bundle.version, skillSource: bundle.source, installed: [] });
-      return 0;
     }
-    const installed: InstallResult[] = [];
     for (const host of hosts) {
       const r = installSkill(host, bundle);
       installed.push(r);
       status(ctx, `· ${host.label}: ${r.dir}${r.previous ? ` (was ${r.previous})` : ''}`);
     }
-    status(ctx, '· tip: add `.geoly/` to .gitignore — `geoly run` writes receipts there');
+    if (hosts.length) status(ctx, '· tip: add `.geoly/` to .gitignore — `geoly run` writes receipts there');
+
+    // 2. Sign-in (lazy auth would do it on first use, but init is where a person expects it).
+    //    No local browser → start the paste-code flow and hand back the finishing command;
+    //    that is a normal outcome here, not a failure.
+    let signedIn = false;
+    let next = 'geoly run "how visible is my brand this week?"';
+    if (this.noLogin) {
+      if (!ctx.staticToken && !loadCredentials(ctx)?.tokens) {
+        warn('geoly: not signed in — run `geoly auth login` before the first `geoly run`');
+        next = 'geoly auth login';
+      }
+    } else if (ctx.staticToken || loadCredentials(ctx)?.tokens) {
+      await ensureAccessToken(ctx);
+      signedIn = true;
+      status(ctx, `· signed in (profile "${ctx.profile}")`);
+    } else if (shouldUseRemoteFlow(ctx)) {
+      await startRemoteLogin(ctx);
+      next = 'geoly auth login --code <code>';
+    } else {
+      await ensureAccessToken(ctx);
+      signedIn = true;
+      status(ctx, `· signed in (profile "${ctx.profile}")`);
+    }
+
     printResult(ctx, {
       signedIn,
       skillVersion: bundle.version,
       skillSource: bundle.source,
       installed: installed.map((r) => ({ host: r.host.id, dir: r.dir, files: r.files, previous: r.previous ?? null })),
-      next: 'geoly run "how visible is my brand this week?"',
+      next,
     });
     return 0;
   }

@@ -103,9 +103,11 @@ export async function startRun(
   if (!res.body) throw new GeolyError('upstream_unavailable', 'Empty response from the agent API');
 
   let runId: string | undefined;
-  // Wait budget: stop following (the run continues) once it is spent. 0 = return as soon as we
-  // know the run id; a huge budget effectively means "until it finishes".
-  const budget = setTimeout(abort, Math.max(0, opts.waitMs));
+  // Wait budget: stop following (the run continues) once it is spent. `--no-wait` (0) must NOT
+  // arm a timer — a 0ms timer fires before the first body chunk arrives and we would abort before
+  // ever seeing `started` (review #2); it returns as soon as the run id is known instead.
+  // A huge budget effectively means "until it finishes".
+  const budget = opts.waitMs > 0 ? setTimeout(abort, opts.waitMs) : undefined;
   try {
     for await (const ev of readSse(res.body, controller.signal)) {
       opts.onEvent?.(ev);
@@ -135,8 +137,12 @@ export async function startRun(
       throw new GeolyError('upstream_unavailable', `Stream error: ${(err as Error).message}`, { cause: err });
     }
   } finally {
-    clearTimeout(budget);
+    if (budget) clearTimeout(budget);
     opts.signal?.removeEventListener('abort', abort);
+    // Whatever way we leave — done, hand-off, idle timeout, Ctrl-C — release the connection.
+    // A half-open socket keeps the event loop alive and the command would print its receipt
+    // and then never exit (review #3). Aborting after `done` is harmless: the server is finished.
+    abort();
   }
   if (!runId) {
     throw new GeolyError('upstream_unavailable', 'The stream ended without a run id or a result', {
@@ -183,15 +189,25 @@ export async function waitRun(
     if (opts.signal?.aborted || elapsed + opts.intervalMs > opts.waitMs) {
       return { kind: 'running', runId, elapsedS: Math.round(elapsed / 1000) };
     }
-    await new Promise<void>((resolve) => {
-      const t = setTimeout(resolve, opts.intervalMs);
-      opts.signal?.addEventListener('abort', () => {
-        clearTimeout(t);
-        resolve();
-      }, { once: true });
-    });
+    await sleepUnlessAborted(opts.intervalMs, opts.signal);
     if (opts.signal?.aborted) return { kind: 'running', runId, elapsedS: Math.round((Date.now() - startedAt) / 1000) };
   }
+}
+
+/** Sleep that ends early on abort; removes its own listener so a long poll does not pile them up (review #7). */
+function sleepUnlessAborted(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve();
+    const onAbort = (): void => {
+      clearTimeout(t);
+      resolve();
+    };
+    const t = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 /** `GET /api/agent/runs` — recent runs for the org (receipt fields only). */
@@ -213,12 +229,26 @@ async function* readSse(body: ReadableStream<Uint8Array>, signal: AbortSignal): 
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  // One idle watchdog for the whole stream, re-armed on every chunk and torn down on exit.
+  // (A fresh timer per read was never cleared: a finished `geoly run` lingered up to 35s before
+  // the process could exit, and >10 chunks tripped MaxListenersExceededWarning — review #1.)
+  let idleTimer: NodeJS.Timeout | undefined;
+  let rejectIdle: ((e: Error) => void) | undefined;
+  const idle = new Promise<never>((_, reject) => {
+    rejectIdle = reject;
+  });
+  idle.catch(() => undefined); // consumed via Promise.race; never let it surface as unhandled
+  const arm = (): void => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => rejectIdle?.(new Error('no data from the server for 35s')), STREAM_IDLE_TIMEOUT_MS);
+  };
+  const onAbort = (): void => {
+    if (idleTimer) clearTimeout(idleTimer);
+  };
+  signal.addEventListener('abort', onAbort, { once: true });
   try {
     for (;;) {
-      const idle = new Promise<never>((_, reject) => {
-        const t = setTimeout(() => reject(new Error('no data from the server for 35s')), STREAM_IDLE_TIMEOUT_MS);
-        signal.addEventListener('abort', () => clearTimeout(t), { once: true });
-      });
+      arm();
       const { value, done } = await Promise.race([reader.read(), idle]);
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
@@ -231,7 +261,10 @@ async function* readSse(body: ReadableStream<Uint8Array>, signal: AbortSignal): 
       }
     }
   } finally {
-    reader.releaseLock();
+    if (idleTimer) clearTimeout(idleTimer);
+    signal.removeEventListener('abort', onAbort);
+    // Give the body back and cancel it — otherwise the socket stays open behind the lock.
+    await reader.cancel().catch(() => undefined);
   }
 }
 
