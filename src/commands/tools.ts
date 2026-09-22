@@ -22,7 +22,14 @@ export class ToolsCommand extends GeolyCommand {
     if (this.json) {
       printResult(
         ctx,
-        tools.map((t) => ({ name: t.name, title: firstLine(t.description), access: toolAccess(t.name) })),
+        tools.map((t) => ({
+          name: t.name,
+          title: firstLine(t.description),
+          access: toolAccess(t.name),
+          // The server keeps retired names registered as forwarding aliases and marks them
+          // `[DEPRECATED → parent]`; agents scripting against --json should skip those.
+          ...(isDeprecated(t.description) ? { deprecated: true } : {}),
+        })),
       );
       return 0;
     }
@@ -31,10 +38,15 @@ export class ToolsCommand extends GeolyCommand {
     const lines = tools
       .slice()
       .sort((a, b) => a.name.localeCompare(b.name))
-      .map((t) => `${t.name.padEnd(width)}  ${toolAccess(t.name).padEnd(16)}  ${firstLine(t.description)}`);
+      .map((t) => `${t.name.padEnd(width)}  ${(isDeprecated(t.description) ? 'deprecated' : toolAccess(t.name)).padEnd(16)}  ${firstLine(t.description)}`);
     printText(lines.join('\n'));
     return 0;
   }
+}
+
+/** Server convention for retired-but-still-registered tools (geoly-app tool-deprecation.ts). */
+function isDeprecated(description?: string): boolean {
+  return (description ?? '').startsWith('[DEPRECATED');
 }
 
 export class SchemaCommand extends GeolyCommand {

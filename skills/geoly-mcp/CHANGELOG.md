@@ -2,7 +2,44 @@
 
 All notable changes to the `geoly-mcp` agent skill.
 
+## 0.5.1
+
+- **Routing first.** New opening section "which door are you at?": with the `geoly` CLI on PATH,
+  an agent hands the question to `geoly run` instead of rebuilding it from `geoly tools` /
+  `schema` / `call` chains (a headless Claude Code run did exactly that — 15 turns, three timeouts,
+  no answer — because the CLI section was labelled "optional, for loops/exports"). MCP tools are
+  the path only when they are mounted and there is no CLI; the MCP pre-flight is marked MCP-only.
+- CLI section rewritten in that order: `run` (default) → `call` (specific pulls / loops) →
+  bootstrap. `--help` named as the flag reference; `tool_error` on heavy tools = use `run`, not retry.
+- Frontmatter description now names the CLI so the skill triggers for CLI users.
+- Two branches the routing left open: a CLI older than 0.3.0 (no `run`) → `geoly upgrade` first,
+  and if that cannot happen, stay on the CLI in its older `tools` / `schema` / `call` shape rather
+  than falling into the MCP pre-flight. Bootstrap is now decided by shell-vs-browser: a shell
+  without a browser (SSH, container, CI) still bootstraps via `auth login --remote` /
+  `GEOLY_TOKEN`; only hosts with no shell at all skip it for the MCP pre-flight.
+- Door 1 also covers a CLI that is on PATH but not signed in (exit code 3): the CLI signs in
+  lazily by itself — browser when there is one, printed URL + `auth login --code` when there is
+  not, `GEOLY_TOKEN` under `CI=true` — so an agent re-runs the command instead of switching doors.
+
 ## 0.5.0
+
+- *(2026-09-20, server-side caliber change — no skill version bump)* **Competitor tools re-read
+  from the in-app pages:** `get_competitor_polarity` now returns the AI Verdict page's "who beats you"
+  board (`brand_mention_vote.stance = preferred`, top 5, ≥3 answers, votes since 2026-09-08) —
+  `tie` / `weWin` / `netLoss` / `coMentions` / `totalNetLosing` are gone; same parameters as before. `get_risk_context_sources`
+  now returns the Verdict page's Sources tab (`kind`, `citedRecords`, `negativeShare` from own-entity
+  negative aspect votes, `topAspects`, `delta`) and **gains parameters** — `time_range` (7d default =
+  the old fixed window, 30d, custom), `start_date`, `end_date`, `platform` (all optional; a call with
+  no arguments still targets the last 7 days on all entitled platforms) — instead of the fixed 7-day, all-platform window; `lift` is gone.
+  `get_competitor_cooccurrence` keeps its parameters; its competitors come from the
+  brand-entity layer (folded names, `stance`, `mentions`) instead of the legacy
+  `prompt_record.competitors` JSON.
+- **`get_competitor_overview` deprecated** → `get_platform_matrix` (`dimension=competitor`); still
+  registered, **its response shape and its price are unchanged** (`brand` + `competitors[]`,
+  same credits as before), so existing callers keep working — only the description and the
+  hosted agent's resident set changed. Catalog moves it to a "Deprecated" section;
+  `metric-calibers.md` explains why matrix competitor counts can be lower than LLM-judged rows
+  (`count_state = counted` only).
 
 - **CLI `geoly run` (CLI ≥ 0.3.0):** delegate a whole question to GEOly's hosted GEO agent
   (`/api/agent/runs`) from the terminal — one JSON receipt (`status`, `run_id`, `answer`,

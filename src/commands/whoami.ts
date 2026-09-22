@@ -1,7 +1,7 @@
 /** `geoly whoami` — resolved identity: auth mode, endpoint, server info, tool surface. */
 import { Command } from 'clipanion';
 import { Ctx } from '../context.js';
-import { McpClient } from '../mcp.js';
+import { McpClient, WRITE_TOOLS } from '../mcp.js';
 import { loadCredentials } from '../oauth.js';
 import { printResult } from '../output.js';
 import { GeolyCommand } from './base.js';
@@ -31,6 +31,8 @@ export class WhoamiCommand extends GeolyCommand {
       mode,
       toolCount: tools.length,
       publicToolsEnabled: [...names].some((n) => n.startsWith('get_public_') || n === 'compare_public_brands'),
+      // Write tools appear only when the consent grant covers them (single-org grant + Write ticked).
+      writeTools: [...names].filter((n) => WRITE_TOOLS.has(n)).sort(),
     });
     return 0;
   }

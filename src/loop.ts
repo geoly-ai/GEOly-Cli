@@ -31,6 +31,13 @@ import {
 } from './tool-catalog.js';
 import { WORKSPACE_TOOLS, WORKSPACE_TOOL_NAMES, Workspace, type PlanItem, type WriteApproval } from './workspace.js';
 
+/**
+ * Go-ahead for one server write tool (archive_prompt, update_prompt_tags, …). Same contract
+ * as file writes: a session asks the person, a script needs `--allow-writes`. No callback =
+ * write tools are not even offered to the model (a tool it may not call is noise).
+ */
+export type ToolWriteApproval = (tool: string, args: Record<string, unknown>) => Promise<boolean>;
+
 /** Client-side tool: the agent's own memory. Not an MCP tool — it writes to your disk. */
 const REMEMBER_TOOL = {
   type: 'function' as const,
@@ -229,9 +236,10 @@ function digestToolResult(text: string): string {
 function toFunctionTools(tools: ToolInfo[], active: Set<string>): unknown[] {
   // Responses 的函数工具是**扁平**结构（name/description/parameters 直接在顶层），
   // 不是 chat completions 的 { type:'function', function:{...} } 包装。
+  // 写工具是否在 `tools` 里由 AgentSession.create 决定（有审批回调才装进目录）。
   return [
     ...tools
-      .filter((t) => !WRITE_TOOLS.has(t.name) && active.has(t.name))
+      .filter((t) => active.has(t.name))
       .map((t) => ({
         type: 'function',
         name: t.name,
@@ -292,6 +300,8 @@ export class AgentSession {
     private messages: InputItem[],
     readonly id: string,
     readonly workspace: Workspace,
+    /** 服务端写工具的审批回调；缺省 = 写工具不在目录里，永远不会走到这里。 */
+    private readonly approveToolWrite?: ToolWriteApproval,
   ) {}
 
   /**
@@ -307,6 +317,8 @@ export class AgentSession {
       resume?: boolean;
       workspaceRoot?: string;
       approveWrite?: WriteApproval;
+      /** Present ⇒ server write tools are offered and each call is gated by it. */
+      approveToolWrite?: ToolWriteApproval;
     } = {},
   ): Promise<AgentSession> {
     const client = new McpClient(ctx);
@@ -335,18 +347,22 @@ export class AgentSession {
       opts.workspaceRoot ?? process.cwd(),
       opts.approveWrite ?? (async () => false),
     );
+    // 写工具只在有人能批的时候进目录（chat 会问、ask 带 --allow-writes）；否则模型
+    // 看不到它们——不是拿到再拒，那只是在烧步数。进了目录也不常驻，走 find_tools 按需取。
+    const catalog = opts.approveToolWrite ? tools : tools.filter((t) => !WRITE_TOOLS.has(t.name));
     return new AgentSession(
       ctx,
       client,
       profile,
       instructions,
-      tools.filter((t) => !WRITE_TOOLS.has(t.name)),
+      catalog,
       new Set(
         tools.filter((t) => CORE_TOOL_NAMES.has(t.name)).map((t) => t.name)
       ),
       messages,
       id,
-      workspace
+      workspace,
+      opts.approveToolWrite,
     );
   }
 
@@ -697,7 +713,18 @@ export class AgentSession {
       };
     }
     try {
-      const result = await this.client.callTool(call.name, args);
+      let writeApproved = false;
+      if (WRITE_TOOLS.has(call.name)) {
+        writeApproved = this.approveToolWrite ? await this.approveToolWrite(call.name, args) : false;
+        if (!writeApproved) {
+          // 被拒是信息，不是异常：模型该改问用户，而不是再试一次同样的调用。
+          return {
+            text: `error: ${call.name} was not approved by the user — do not retry it; tell the user what you wanted to change and let them decide.`,
+            failed: true,
+          };
+        }
+      }
+      const result = await this.client.callTool(call.name, args, { writeApproved });
       return { text: serializeResult(unwrapToolResult(call.name, result)), failed: false };
     } catch (err) {
       const message = err instanceof GeolyError ? err.message : (err as Error).message;

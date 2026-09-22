@@ -30,7 +30,12 @@
  * 18. a bad command line (missing positional / unknown flag / unknown subcommand) is a
  *     usage_error on stderr with exit 2 and honours --error-format json — never stdout / exit 1;
  * 19. a run stopped by its credit cap keeps status done / exit 0 but says so on stderr, and the
- *     fresh receipt carries the question and max_credits the CLI knows.
+ *     fresh receipt carries the question and max_credits the CLI knows;
+ * 20. a write tool is never sent without `writeApproved` (write_blocked, exit 1, nothing on the
+ *     wire) and goes through with it — the seven server write tools are all gated;
+ * 21. an SSE reply whose stream stays open after the JSON-RPC frame (proxy / keep-alive) is
+ *     resolved from the frame at once instead of waiting for EOF (0.3.1: twice in production a
+ *     19s tool answer was thrown away because the CLI sat on `res.text()` until its own timeout).
  */
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -53,6 +58,7 @@ let seenIdempotencyKey: string | undefined;
 let pollCount = 0;
 let rpcCalls = 0;
 let guardedServed = false;
+let writeCalls = 0;
 let tokenExchanges: Array<Record<string, string>> = [];
 
 const sse = (event: string, data: unknown) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -131,9 +137,25 @@ const server = createServer((req, res) => {
     if (req.method === 'POST' && url.pathname === '/api/mcp') {
       rpcCalls += 1;
       const rpc = JSON.parse(body) as { id: number; method: string; params?: { name?: string } };
-      res.writeHead(200, { 'content-type': 'application/json' });
+      if (rpc.method !== 'tools/call' || rpc.params?.name !== 'sse_open') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+      }
       if (rpc.method === 'tools/call' && rpc.params?.name === 'bad_params') {
         res.end(JSON.stringify({ jsonrpc: '2.0', id: rpc.id, error: { code: -32602, message: 'Invalid arguments: time_range' } }));
+        return;
+      }
+      if (rpc.method === 'tools/call' && rpc.params?.name === 'archive_prompt') {
+        writeCalls += 1;
+        res.end(JSON.stringify({ jsonrpc: '2.0', id: rpc.id, result: { content: [{ type: 'text', text: '{"success":true,"changed":true}' }] } }));
+        return;
+      }
+      if (rpc.method === 'tools/call' && rpc.params?.name === 'sse_open') {
+        // Frame first, then heartbeats forever: the client must not need EOF to read the answer.
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        res.write(`: ping\n\n`);
+        res.write(`event: message\ndata: ${JSON.stringify({ jsonrpc: '2.0', id: rpc.id, result: { content: [{ type: 'text', text: '{"late":false}' }] } })}\n\n`);
+        const t = setInterval(() => res.write(': ping\n\n'), 100);
+        res.on('close', () => clearInterval(t));
         return;
       }
       if (rpc.method === 'tools/call' && rpc.params?.name === 'guarded') {
@@ -349,6 +371,27 @@ async function main(): Promise<void> {
     gbkKind = err instanceof GeolyError ? err.kind : String(err);
   }
   check('17d non-UTF-8 bytes refused as usage_error', gbkKind === 'usage_error', gbkKind);
+
+  // 20. write tools are gated client-side until the caller approves
+  const wireBefore = rpcCalls;
+  let blocked: GeolyError | undefined;
+  try {
+    await client.callTool('archive_prompt', { prompt_id: 'p1' });
+  } catch (err) {
+    blocked = err instanceof GeolyError ? err : undefined;
+  }
+  check('20a write tool without approval → write_blocked exit 1, nothing sent', blocked?.kind === 'write_blocked' && blocked.exitCode === 1 && rpcCalls === wireBefore && writeCalls === 0, `${blocked?.kind} calls=${rpcCalls - wireBefore}`);
+  const approved = await client.callTool('archive_prompt', { prompt_id: 'p1' }, { writeApproved: true });
+  check('20b write tool with approval goes through', !approved.isError && writeCalls === 1);
+  const { WRITE_TOOLS } = await import('../src/mcp.js');
+  const expectedWrites = ['archive_prompt', 'create_competitor', 'create_prompt', 'create_topic', 'move_prompts_to_topic', 'trigger_prompt', 'update_prompt_tags'];
+  check('20c the seven server write tools are all gated', JSON.stringify([...WRITE_TOOLS].sort()) === JSON.stringify(expectedWrites), [...WRITE_TOOLS].sort().join(','));
+
+  // 21. SSE reply resolved from the frame, not from EOF
+  const tSse = Date.now();
+  const sseResult = await client.callTool('sse_open', {});
+  const sseMs = Date.now() - tSse;
+  check('21 open SSE stream → answer taken from the frame within the budget', !sseResult.isError && sseMs < 2_000, `${sseMs}ms`);
 
   // 18. command-line parse errors: stderr, exit 2, json when asked
   const bin = path.join(process.cwd(), 'src', 'bin.ts');

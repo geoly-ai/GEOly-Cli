@@ -8,17 +8,18 @@
  * with schema-driven type coercion.
  */
 import * as fs from 'node:fs';
+import * as readline from 'node:readline';
 import { Command, Option } from 'clipanion';
 import { Ctx, CtxInput, makeCtx } from '../context.js';
 import { GeolyError, asGeolyError } from '../errors.js';
-import { McpClient, ToolInfo, unwrapToolResult } from '../mcp.js';
+import { McpClient, ToolInfo, WRITE_TOOLS, toolAccess, unwrapToolResult, writeGrantHint } from '../mcp.js';
 import { printResult, reportError, warn } from '../output.js';
 import { maybeNotifyUpdate } from '../updatecheck.js';
 
 /** Flags owned by the CLI inside `call` — a tool param with one of these names must use --data. */
 const RESERVED = new Set([
   'data', 'input', 'org', 'profile', 'output', 'error-format', 'quiet', 'q',
-  'refresh', 'timeout', 'no-auto-auth', 'help', 'h',
+  'refresh', 'timeout', 'no-auto-auth', 'help', 'h', 'yes', 'y',
 ]);
 
 interface ParsedCall {
@@ -36,6 +37,7 @@ export class CallCommand extends Command {
       ['Headline KPIs', 'geoly call get_brand_overview --time_range 30d'],
       ['Whole argument object', `geoly call get_prompt_list --data '{"page":1,"page_size":20}'`],
       ['From stdin', `echo '{"time_range":"30d"}' | geoly call get_brand_overview --input -`],
+      ['A write tool (needs a Write grant; --yes skips the confirmation)', 'geoly call archive_prompt --prompt_id <id> --yes'],
     ],
   });
 
@@ -59,13 +61,21 @@ export class CallCommand extends Command {
       const tools = await client.listTools(parsed.reserved.get('refresh') === true);
       const tool = tools.find((t) => t.name === this.tool);
       if (!tool) {
+        // A write tool the server did not register is a grant problem, not a typo.
+        if (WRITE_TOOLS.has(this.tool)) {
+          throw new GeolyError('grant_missing', `Tool "${this.tool}" is not available on this authorization`, {
+            tool: this.tool,
+            hint: writeGrantHint(this.tool, ctx),
+          });
+        }
         const { suggest } = await import('./tools.js');
         throw new GeolyError('usage_error', `Unknown tool "${this.tool}"`, {
           hint: suggest(this.tool, tools.map((t) => t.name)),
         });
       }
       const args = buildArguments(parsed, tool);
-      const result = await client.callTool(tool.name, args);
+      const writeApproved = await confirmWrite(tool, args, parsed.reserved.get('yes') === true || parsed.reserved.get('y') === true);
+      const result = await client.callTool(tool.name, args, { writeApproved });
       const value = unwrapToolResult(tool.name, result);
       emitTruncationHints(value);
       printResult(ctx, value);
@@ -101,13 +111,36 @@ export class CallCommand extends Command {
   }
 }
 
+// ---- Write confirmation ---------------------------------------------------
+
+/**
+ * A write tool runs only with an explicit go-ahead: `--yes`, or a [y/N] answered in a
+ * terminal. Piped stdin (a script, an agent) with no `--yes` is a refusal — the error
+ * carries the exact re-run — never a silent mutation. Read tools pass straight through.
+ */
+async function confirmWrite(tool: ToolInfo, args: Record<string, unknown>, yes: boolean): Promise<boolean> {
+  if (!WRITE_TOOLS.has(tool.name)) return true;
+  if (yes) return true;
+  if (!process.stdin.isTTY || !process.stderr.isTTY) return false;
+  const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
+  try {
+    const credits = toolAccess(tool.name) === 'credit-consuming' ? ' and spends monitoring credits' : '';
+    process.stderr.write(`${tool.name} modifies data${credits}.\n  arguments: ${JSON.stringify(args)}\n`);
+    const answer = await new Promise<string>((resolve) => rl.question('  proceed? [y/N] ', resolve));
+    const a = answer.trim().toLowerCase();
+    return a === 'y' || a === 'yes';
+  } finally {
+    rl.close();
+  }
+}
+
 // ---- Parsing --------------------------------------------------------------
 
 /** Split raw proxied args into reserved CLI flags and tool parameter tokens. */
 export function parseCallArgs(rest: string[]): ParsedCall {
   const reserved = new Map<string, string | boolean>();
   const params: Array<[string, string | true]> = [];
-  const boolReserved = new Set(['quiet', 'q', 'refresh', 'no-auto-auth', 'help', 'h']);
+  const boolReserved = new Set(['quiet', 'q', 'refresh', 'no-auto-auth', 'help', 'h', 'yes', 'y']);
 
   for (let i = 0; i < rest.length; i += 1) {
     const token = rest[i]!;

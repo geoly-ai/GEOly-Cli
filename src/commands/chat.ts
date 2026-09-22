@@ -13,7 +13,7 @@ import * as readline from 'node:readline';
 import { Command, Option } from 'clipanion';
 import { Ctx } from '../context.js';
 import { GeolyError, asGeolyError } from '../errors.js';
-import { AgentSession } from '../loop.js';
+import { AgentSession, type ToolWriteApproval } from '../loop.js';
 import { bottomRule, frameWidth, row, topRule } from '../frame.js';
 import { memoryPath, readNotes } from '../memory.js';
 import { isAmbiguousOrg, resolveAmbiguousOrg } from '../org-select.js';
@@ -97,6 +97,7 @@ export class ChatCommand extends GeolyCommand {
 
     // 写入审批需要 readline，而 readline 又要在会话建好后才开；用一个可后填的钩子解耦。
     let askApproval: WriteApproval = async () => this.allowWrites;
+    let askToolApproval: ToolWriteApproval = async () => this.allowWrites;
     const spinner = new Spinner();
     const open = async (c: Ctx): Promise<AgentSession> => {
       spinner.start('connecting');
@@ -107,6 +108,7 @@ export class ChatCommand extends GeolyCommand {
           resume: this.continueSession,
           workspaceRoot: this.workspace,
           approveWrite: (p, bytes) => askApproval(p, bytes),
+          approveToolWrite: (tool, args) => askToolApproval(tool, args),
         });
       } finally {
         spinner.stop();
@@ -149,6 +151,21 @@ export class ChatCommand extends GeolyCommand {
         await prompt(
           rl,
           `  ${style.yellow('write')} ${relativePath} (${bytes} bytes) — allow? [y/N/a=always] `,
+        )
+      )?.trim().toLowerCase();
+      if (answer === 'a' || answer === 'always') {
+        alwaysAllow = true;
+        return true;
+      }
+      return answer === 'y' || answer === 'yes';
+    };
+    // 服务端写工具（归档 / 打标签 / 挪主题 / 触发采集）与文件写入同一套问法与「以后都允许」。
+    askToolApproval = async (tool, args) => {
+      if (alwaysAllow) return true;
+      const answer = (
+        await prompt(
+          rl,
+          `  ${style.yellow('write')} ${tool} ${style.dim(JSON.stringify(args).slice(0, 160))} — allow? [y/N/a=always] `,
         )
       )?.trim().toLowerCase();
       if (answer === 'a' || answer === 'always') {

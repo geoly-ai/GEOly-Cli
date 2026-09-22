@@ -254,7 +254,12 @@ feeds `geoly <command> --help`; README mirrors it verbatim.
 
 ## Scope of v0.3
 
-- Read-only: write tools return `kind: write_blocked`. Write support ships in a later
-  release behind explicit `--yes` confirmation.
+- Writes are opt-in per call: a write tool (`archive_prompt`, `update_prompt_tags`,
+  `move_prompts_to_topic`, `create_*`, `trigger_prompt`) runs only after `--yes` or a `[y/N]`
+  answered in a terminal; piped stdin without `--yes` returns `kind: write_blocked` (exit 1)
+  with the exact re-run in `hint`. The server registers write tools only for a single-organization
+  grant with Write ticked on the consent screen; calling one that was not granted returns
+  `kind: grant_missing` (exit 3) naming the resource to tick. `geoly tools --json` marks
+  retired forwarding aliases with `deprecated: true`.
 - Pagination parameters are passed through natively per tool (`page`/`page_size` or
   `limit`/`offset` — see each tool's schema).

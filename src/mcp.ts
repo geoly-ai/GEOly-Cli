@@ -50,14 +50,55 @@ export function structuredErrorTail(
   }
 }
 
-/** Write tools are blocked in v0 (contract §9). trigger_prompt also consumes credits. */
-export const WRITE_TOOLS = new Set(['create_prompt', 'create_topic', 'create_competitor', 'trigger_prompt']);
+/**
+ * Server write tools — mirror of geoly-app `MCP_STANDARD_WRITE_TOOLS` (src/lib/geo-agent/tools.ts);
+ * change both together. The server only registers them for a token whose consent screen
+ * granted Write on the resource, and never for an all-organizations grant. The CLI never
+ * calls one without an explicit go-ahead (contract §9): `geoly call … --yes` or an
+ * interactive [y/N], `--allow-writes` or an interactive approval in an agent session.
+ * trigger_prompt additionally consumes monitoring credits.
+ */
+export const WRITE_TOOLS = new Set([
+  'create_prompt',
+  'create_topic',
+  'create_competitor',
+  'trigger_prompt',
+  'archive_prompt',
+  'update_prompt_tags',
+  'move_prompts_to_topic',
+]);
+
+/** Consent-screen resource each write tool needs (for the "re-login and tick Write" hint). */
+export const WRITE_TOOL_RESOURCE: Record<string, string> = {
+  create_prompt: 'prompt',
+  archive_prompt: 'prompt',
+  update_prompt_tags: 'prompt',
+  move_prompts_to_topic: 'prompt',
+  create_topic: 'topic',
+  create_competitor: 'competitor',
+  trigger_prompt: 'monitoring trigger',
+};
 
 export type ToolAccess = 'read-only' | 'write' | 'credit-consuming';
 
 export function toolAccess(name: string): ToolAccess {
   if (name === 'trigger_prompt') return 'credit-consuming';
   return WRITE_TOOLS.has(name) ? 'write' : 'read-only';
+}
+
+/**
+ * Why a write tool is not in this token's tool list. The server registers write tools
+ * per consent grant, so "unknown tool" for a known write name means "not granted here".
+ */
+export function writeGrantHint(name: string, ctx: Ctx): string {
+  const resource = WRITE_TOOL_RESOURCE[name] ?? 'that resource';
+  if (ctx.staticToken) {
+    return `GEOLY_TOKEN tokens are read-only. Unset it and run \`geoly auth login\`, then tick Write › ${resource} on the consent screen.`;
+  }
+  return (
+    `This authorization has no Write grant for ${resource}. Run \`geoly auth login\` again, ` +
+    `choose ONE organization (an all-organizations grant is read-only) and tick Write › ${resource} on the consent screen, then retry.`
+  );
 }
 
 export interface ToolInfo {
@@ -228,7 +269,8 @@ export class McpClient {
   }
 
   /**
-   * tools/call for one tool. Write tools are blocked client-side in v0.
+   * tools/call for one tool. A write tool needs an explicit go-ahead from the caller
+   * (`writeApproved`) — the CLI never mutates data on the strength of a flag it inferred.
    *
    * The server never rate-limits a tool call at the HTTP layer (its metering contract is
    * "never break the connection"): a per-organization guard shows up as an `isError` result
@@ -237,11 +279,18 @@ export class McpClient {
    * here — the server asks for ~60s and the result is cached when it lands, so that is the
    * caller's decision.
    */
-  async callTool(name: string, args: Record<string, unknown>): Promise<ToolCallResult> {
-    if (WRITE_TOOLS.has(name)) {
-      throw new GeolyError('write_blocked', `Tool "${name}" performs writes — blocked in this CLI version`, {
+  async callTool(
+    name: string,
+    args: Record<string, unknown>,
+    opts: { writeApproved?: boolean } = {},
+  ): Promise<ToolCallResult> {
+    if (WRITE_TOOLS.has(name) && !opts.writeApproved) {
+      throw new GeolyError('write_blocked', `Tool "${name}" modifies data — confirmation required`, {
         tool: name,
-        hint: 'Write support ships in a later release. Use the GEOly web app or the remote MCP with a write grant.',
+        hint:
+          name === 'trigger_prompt'
+            ? 'It also spends monitoring credits. Re-run with --yes to confirm, or answer the prompt in a terminal.'
+            : 'Re-run with --yes to confirm (scripts), or answer the prompt in a terminal.',
       });
     }
     const result = await this.request<ToolCallResult>('tools/call', { name, arguments: args }, { tool: name });
@@ -267,26 +316,56 @@ export class McpClient {
   }
 }
 
-/** Parse a JSON or SSE-framed JSON-RPC response body. */
+/** The JSON-RPC response frame inside one SSE frame, if it holds one. */
+function rpcFrame(frame: string): JsonRpcResponse | undefined {
+  const data = frame
+    .split(/\r?\n/)
+    .filter((l) => l.startsWith('data:'))
+    .map((l) => l.slice(5).trim())
+    .join('');
+  if (!data) return undefined;
+  const msg = JSON.parse(data) as JsonRpcResponse;
+  return msg && ('result' in msg || 'error' in msg) ? msg : undefined;
+}
+
+/**
+ * Parse a JSON or SSE-framed JSON-RPC response body.
+ *
+ * The SSE branch is incremental on purpose: it resolves on the first frame that carries a
+ * JSON-RPC result and cancels the rest. Reading the body to EOF (`res.text()`) made the CLI
+ * hostage to whoever closes the stream — twice in 2026-09 a tool finished server-side in
+ * ~19s (mcp_call_log says success) while the stream stayed open behind the proxy and the
+ * CLI sat there until its own timeout. The answer was already on the wire; take it.
+ */
 async function parseRpcBody(res: Response, tool?: string): Promise<JsonRpcResponse> {
   const contentType = res.headers.get('content-type') ?? '';
-  const text = await res.text();
   try {
-    if (contentType.includes('text/event-stream')) {
-      // Frames are separated by blank lines; each frame's data: lines hold JSON.
-      for (const frame of text.split(/\r?\n\r?\n/)) {
-        const data = frame
-          .split(/\r?\n/)
-          .filter((l) => l.startsWith('data:'))
-          .map((l) => l.slice(5).trim())
-          .join('');
-        if (!data) continue;
-        const msg = JSON.parse(data) as JsonRpcResponse;
-        if (msg && ('result' in msg || 'error' in msg)) return msg;
-      }
-      throw new Error('no JSON-RPC response frame in event stream');
+    if (!contentType.includes('text/event-stream')) {
+      return JSON.parse(await res.text()) as JsonRpcResponse;
     }
-    return JSON.parse(text) as JsonRpcResponse;
+    if (!res.body) throw new Error('empty event stream');
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (value) buffer += decoder.decode(value, { stream: !done });
+      // Frames are separated by blank lines; keep the (possibly partial) last one in the buffer.
+      const frames = buffer.split(/\r?\n\r?\n/);
+      buffer = done ? '' : (frames.pop() ?? '');
+      for (const frame of frames) {
+        const msg = rpcFrame(frame);
+        if (msg) {
+          if (!done) reader.cancel().catch(() => undefined);
+          return msg;
+        }
+      }
+      if (done) {
+        const tail = buffer ? rpcFrame(buffer) : undefined;
+        if (tail) return tail;
+        throw new Error('no JSON-RPC response frame in event stream');
+      }
+    }
   } catch (err) {
     throw new GeolyError('upstream_unavailable', 'Could not parse the server response', { tool, cause: err });
   }
