@@ -23,8 +23,9 @@ const HIGH_TRAFFIC = [
   'query_analytics', // 85
   'get_prompt_list', // 81
   'get_citation_overview', // 67
-  'get_competitor_overview', // 51
-  'get_brand_citations_daily', // 24
+  // get_competitor_overview（51）/ get_brand_citations_daily（24）自 2026-09-21 起是
+  // get_platform_matrix dimension=competitor / query_analytics 的弃用转发别名（服务端
+  // #1799 / #1805），常驻的必须是活着的名字——两个父工具都已在名单里。
   'get_prompt_detail', // 23
   'get_competitor_polarity', // 23
   'get_platform_matrix', // 19
@@ -37,6 +38,9 @@ const HIGH_TRAFFIC = [
 /** 入口与发现：占比不高，但少了它们连第一步都迈不出去。 */
 const ENTRY_POINTS = [
   'get_topic_list', // topic id 的来源（服务端 2026-09-20 起才在面上）
+  // get_brand_context：一次定位（品牌/日期/平台/topics/竞品/额度），替代 run 开头的
+  // get_current_date + get_competitor_list + get_available_platforms 那几跳（服务端 #1798）
+  'get_brand_context',
   'get_current_date',
   'search_public_entities',
   'list_organizations',
