@@ -2,6 +2,22 @@
 
 All notable changes to the `geoly-mcp` agent skill.
 
+## 0.5.3
+
+- **`get_competitor_list` is a paged envelope** — `{ rows[], total, page, page_size, total_pages,
+  counts {tracked, suggested, removed}, names_mode }` instead of one flat array. A user report:
+  53 entities × up to 200 spellings each blew through the 60k output cap and the generic
+  truncation left 3 rows with no way to fetch the rest. New parameters: `status`
+  (all / tracked / suggested / removed), `search` (name, root domain or any spelling),
+  `entity_id`, `names` (`summary` default = user-added + up to 12 learned spellings; `full`;
+  `none`), `names_offset`, `page` / `page_size` (default 50, max 200). Every row now carries
+  `names_total` and `names_truncated`; `entity_id` + `names="full"` returns one entity's
+  complete alias list 500 at a time (`names_next_offset` → `names_offset`; the page itself
+  folds at 200).
+- Truncation messages (`_message` on `_truncated` results) now name **that tool's** narrowing
+  parameters instead of the old fixed "time_range, platform, domain" text, which most tools
+  do not have.
+
 ## 0.5.2
 
 Consolidates the 2026-09-20/21 tool-surface overhaul (geoly-app #1817 + #1796, 15 PRs). Rule of

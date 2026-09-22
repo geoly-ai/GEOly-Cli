@@ -240,14 +240,20 @@ Four brand-scoped tools now read the **same functions the product pages use**. W
 changed meaning it was renamed or removed, never silently re-valued:
 
 1. **`get_competitor_list` = the brand library** (Settings › Brand › Brands), sourced from the
-   brand-entity layer instead of the legacy `competitor` table. One flat array with
-   `status: tracked | suggested | removed`; tracked rows include your own brand
-   (`is_own_brand=true`) and every confirmed competitor entity (usually **more rows** than the
-   old list — auto-confirmed brands were never in the competitor table). Competitors =
-   `status="tracked" AND is_own_brand=false`. `mentions_30d` is the entity rollup's rolling
-   30-day mention count. Legacy `id` / `domains` / `aliases` / `isActive` stay for one release
-   but are **mapped** from the entity layer (`id` = competitor row id only for user-added rows,
-   else null; `domains` = `[root_domain]`; `aliases` = all dictionary spellings).
+   brand-entity layer instead of the legacy `competitor` table. A paged envelope
+   (`rows[]`, `total`, `page`, `page_size`, `total_pages`, `counts`) — since 0.5.3; the earlier
+   flat array overflowed the 60k output cap on libraries with a few hundred spellings and
+   silently dropped rows. Rows carry `status: tracked | suggested | removed`; tracked rows
+   include your own brand (`is_own_brand=true`) and every confirmed competitor entity (usually
+   **more rows** than the old list — auto-confirmed brands were never in the competitor
+   table). Competitors = `status="tracked" AND is_own_brand=false`. `mentions_30d` is the
+   entity rollup's rolling 30-day mention count. `names[]` defaults to a **summary** (every
+   user-added spelling + up to 12 learned ones) with `names_total` / `names_truncated` telling
+   you what was left out; `entity_id` + `names="full"` returns one entity's complete alias list
+   500 at a time (`names_offset` / `names_next_offset` — own-brand entities on large accounts
+   run past 1,000 spellings). Legacy `id` / `domains` / `aliases` / `isActive` stay for one release but are
+   **mapped** from the entity layer (`id` = competitor row id only for user-added rows, else
+   null; `domains` = `[root_domain]`; `aliases` = the same spellings as `names[]`).
 2. **`resolve_my_brand_public.bestMatch` is the /performance industry-profile decision**
    (domain root → exact normalized name / match terms → alias; each arm accepts only a single
    active public brand with public data). New `ambiguous` flag: `true` = collision, the app

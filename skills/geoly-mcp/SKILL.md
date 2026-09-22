@@ -3,7 +3,7 @@ name: geoly-mcp
 description: "Use when querying or reporting on AI brand visibility through GEOly — via the geoly CLI (geoly run / geoly call) or the GEOly MCP server: routing a question to the right entry point, following the org/brand discovery flow, quoting the correct KPI caliber, and avoiding metric-definition pitfalls. Triggers: GEOly; geoly CLI; GEO / AI-visibility reporting; citation rate, mention rate, AIGVR, Share of Model; daily trends; competitor, category whitespace, brand momentum; any call to get_brand_overview / query_analytics / get_prompt_* / get_citation_* / compare_public_brands / get_category_* / get_public_* tools."
 metadata:
   author: geoly
-  version: "0.5.2"
+  version: "0.5.3"
 ---
 
 # GEOly MCP
