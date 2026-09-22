@@ -73,6 +73,11 @@ export class CallCommand extends Command {
           hint: suggest(this.tool, tools.map((t) => t.name)),
         });
       }
+      // Retired names still answer (forwarding aliases) but the parent is the one to script against.
+      if ((tool.description ?? '').startsWith('[DEPRECATED')) {
+        const firstLine = (tool.description ?? '').split('\n')[0] ?? '';
+        warn(`geoly: ${tool.name} is deprecated — ${firstLine.slice(0, 160)}`);
+      }
       const args = buildArguments(parsed, tool);
       const writeApproved = await confirmWrite(tool, args, parsed.reserved.get('yes') === true || parsed.reserved.get('y') === true);
       const result = await client.callTool(tool.name, args, { writeApproved });

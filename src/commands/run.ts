@@ -206,6 +206,9 @@ ${renderExitCodeTable()}
   spec = Option.String('--spec', { description: 'Server-defined deliverable spec (e.g. weekly-brand-health, content-brief)' });
   extraContext = Option.String('--context', { description: 'Extra input for the agent; @file reads a file' });
   maxCredits = Option.String('--max-credits', { description: 'Cap this run\'s spend (credits, 25..2000)' });
+  allowWrites = Option.Boolean('--allow-writes', false, {
+    description: 'Let the agent call GEOly write tools (archive_prompt, update_prompt_tags, move_prompts_to_topic, create_*); needs a Write grant on the token',
+  });
   wait = Option.String('--wait', { description: `Seconds to follow before handing off (default ${DEFAULT_WAIT_S})` });
   noWait = Option.Boolean('--no-wait', false, { description: 'Return as soon as the server acknowledges the run' });
   noSave = Option.Boolean('--no-save', false, { description: 'Do not write the receipt to ./.geoly/runs/' });
@@ -230,6 +233,7 @@ ${renderExitCodeTable()}
     }
 
     const req: RunRequest = { question: this.question.trim(), brandId: this.brand, spec: this.spec };
+    if (this.allowWrites) req.allowWrites = true;
     if (!req.question) throw new GeolyError('usage_error', 'Question is empty');
     if (this.extraContext !== undefined) req.context = readContext(this.extraContext);
     if (this.maxCredits !== undefined) {

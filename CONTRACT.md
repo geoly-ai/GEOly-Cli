@@ -260,6 +260,11 @@ feeds `geoly <command> --help`; README mirrors it verbatim.
   with the exact re-run in `hint`. The server registers write tools only for a single-organization
   grant with Write ticked on the consent screen; calling one that was not granted returns
   `kind: grant_missing` (exit 3) naming the resource to tick. `geoly tools --json` marks
-  retired forwarding aliases with `deprecated: true`.
+  retired forwarding aliases with `deprecated: true`, and `geoly call` on one prints a one-line
+  deprecation warning on stderr (the call still runs).
+- `geoly run --allow-writes` asks the hosted agent for the same write tools (server
+  `allow_writes`); the server grants them per resource from the same consent Write bits, and a
+  run without the flag or without the grant is read-only. `trigger_prompt` is never available to
+  the hosted agent (it spends monitoring credits per call).
 - Pagination parameters are passed through natively per tool (`page`/`page_size` or
   `limit`/`offset` — see each tool's schema).

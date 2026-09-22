@@ -20,6 +20,11 @@ export interface RunRequest {
   spec?: string;
   context?: string;
   maxCredits?: number;
+  /**
+   * Let the hosted agent call GEOly write tools this run (server `allow_writes`). The server still
+   * checks the token's consent Write grant per resource; without it the run is read-only.
+   */
+  allowWrites?: boolean;
 }
 
 /** One SSE event as the server names them (`started`, `step`, `tool`, `text`, `done`, …). */
@@ -43,8 +48,9 @@ const STREAM_IDLE_TIMEOUT_MS = 35_000;
 
 /**
  * Stable key for "this exact command": every input that changes what the server would do is in it
- * (org, brand, spec, question, context, spend cap). Lowering `--max-credits` on a re-run is a new
- * command — it must not replay the run that is still going with the higher cap.
+ * (org, brand, spec, question, context, spend cap, write permission). Lowering `--max-credits` on
+ * a re-run is a new command — it must not replay the run that is still going with the higher cap;
+ * so is adding `--allow-writes` to a question that ran read-only.
  */
 export function idempotencyKeyFor(ctx: Ctx, req: RunRequest): string {
   const material = JSON.stringify([
@@ -54,6 +60,7 @@ export function idempotencyKeyFor(ctx: Ctx, req: RunRequest): string {
     req.question,
     req.context ?? '',
     req.maxCredits ?? '',
+    req.allowWrites ? 'writes' : '',
   ]);
   return crypto.createHash('sha256').update(material).digest('hex');
 }
@@ -78,6 +85,7 @@ export async function startRun(
   if (req.spec) body.spec = req.spec;
   if (req.context) body.context = req.context;
   if (req.maxCredits !== undefined) body.max_credits = req.maxCredits;
+  if (req.allowWrites) body.allow_writes = true;
 
   const headers: Record<string, string> = { accept: 'text/event-stream' };
   if (opts.idempotencyKey) headers['idempotency-key'] = opts.idempotencyKey;
