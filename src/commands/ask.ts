@@ -34,7 +34,7 @@ export class AskCommand extends GeolyCommand {
   brand = Option.String('--brand', { description: 'Brand id to bind this run to (defaults to the token brand)' });
   locale = Option.String('--locale', { description: 'Answer language: zh | en' });
   allowWrites = Option.Boolean('--allow-writes', false, {
-    description: 'Let the agent write files into the workspace',
+    description: 'Let the agent write files into the workspace and call GEOly write tools (archive_prompt, update_prompt_tags, …)',
   });
   workspace = Option.String('--workspace', {
     description: 'Directory the agent may read and write (default: current directory)',
@@ -61,8 +61,9 @@ export class AskCommand extends GeolyCommand {
         brandId: this.brand,
         locale: this.locale as 'zh' | 'en' | undefined,
         workspaceRoot: this.workspace,
-        // 脚本里没人可问：只有显式 --allow-writes 才放行。
+        // 脚本里没人可问：只有显式 --allow-writes 才放行（文件与服务端写工具同一开关）。
         approveWrite: async () => this.allowWrites,
+        ...(this.allowWrites ? { approveToolWrite: async () => true } : {}),
       });
     } catch (err) {
       // 非交互场景不弹选择器（脚本/CI 没人可答），但至少把组织名字列出来，

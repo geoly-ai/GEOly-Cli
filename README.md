@@ -66,6 +66,10 @@ going on the server; run the `next` command to pick it up. The full receipt is a
 `./.geoly/runs/<run_id>.json` (add `.geoly/` to your `.gitignore`). Re-running the exact same
 command within 10 minutes replays the same run instead of paying for a new one.
 
+**Read `stopped`, not only `status`.** A run that hit its `--max-credits` cap comes back
+`status: done`, `stopped: max_steps`, `stopped_reason: budget` with a placeholder answer —
+nothing failed, so the exit code is 0, but the CLI says on stderr that the answer is partial.
+
 ## Built for agents
 
 - **Stable contract**: flags, output behavior, and exit codes are the stable surface.
@@ -87,8 +91,13 @@ command within 10 minutes replays the same run instead of paying for a new one.
   7  credits exhausted — this period's credits are used up
   ```
 - **Help is plain text when piped** (`geoly --help | cat`), so agents can read it.
-- **Read-only** data tools in this release. Write tools arrive later behind explicit
-  confirmation flags.
+- **Writes need a go-ahead.** `archive_prompt`, `update_prompt_tags`, `move_prompts_to_topic`,
+  `create_prompt` / `create_topic` / `create_competitor` and `trigger_prompt` (spends credits)
+  only run after a `[y/N]` in a terminal or `--yes` in a script; the agent session asks the
+  same way (`--allow-writes` for `ask`). They appear in your tool list only when the consent
+  screen granted Write on that resource for ONE organization — `geoly whoami` shows
+  `writeTools`, and a write tool you were not granted fails with `grant_missing` and the
+  re-login hint.
 - **Skills, installed for you.** `geoly init` writes the GEOly [Agent Skill](./skills/geoly-mcp/SKILL.md)
   into every agent host it finds (`~/.claude/skills`, `~/.codex/skills`, `~/.cursor/skills`),
   fetching the current copy from app.geoly.ai; `geoly upgrade` refreshes it.

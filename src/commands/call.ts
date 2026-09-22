@@ -8,17 +8,18 @@
  * with schema-driven type coercion.
  */
 import * as fs from 'node:fs';
+import * as readline from 'node:readline';
 import { Command, Option } from 'clipanion';
 import { Ctx, CtxInput, makeCtx } from '../context.js';
 import { GeolyError, asGeolyError } from '../errors.js';
-import { McpClient, ToolInfo, unwrapToolResult } from '../mcp.js';
+import { McpClient, ToolInfo, WRITE_TOOLS, toolAccess, unwrapToolResult, writeGrantHint } from '../mcp.js';
 import { printResult, reportError, warn } from '../output.js';
 import { maybeNotifyUpdate } from '../updatecheck.js';
 
 /** Flags owned by the CLI inside `call` — a tool param with one of these names must use --data. */
 const RESERVED = new Set([
   'data', 'input', 'org', 'profile', 'output', 'error-format', 'quiet', 'q',
-  'refresh', 'timeout', 'no-auto-auth', 'help', 'h',
+  'refresh', 'timeout', 'no-auto-auth', 'help', 'h', 'yes', 'y',
 ]);
 
 interface ParsedCall {
@@ -36,6 +37,7 @@ export class CallCommand extends Command {
       ['Headline KPIs', 'geoly call get_brand_overview --time_range 30d'],
       ['Whole argument object', `geoly call get_prompt_list --data '{"page":1,"page_size":20}'`],
       ['From stdin', `echo '{"time_range":"30d"}' | geoly call get_brand_overview --input -`],
+      ['A write tool (needs a Write grant; --yes skips the confirmation)', 'geoly call archive_prompt --prompt_id <id> --yes'],
     ],
   });
 
@@ -59,13 +61,26 @@ export class CallCommand extends Command {
       const tools = await client.listTools(parsed.reserved.get('refresh') === true);
       const tool = tools.find((t) => t.name === this.tool);
       if (!tool) {
+        // A write tool the server did not register is a grant problem, not a typo.
+        if (WRITE_TOOLS.has(this.tool)) {
+          throw new GeolyError('grant_missing', `Tool "${this.tool}" is not available on this authorization`, {
+            tool: this.tool,
+            hint: writeGrantHint(this.tool, ctx),
+          });
+        }
         const { suggest } = await import('./tools.js');
         throw new GeolyError('usage_error', `Unknown tool "${this.tool}"`, {
           hint: suggest(this.tool, tools.map((t) => t.name)),
         });
       }
+      // Retired names still answer (forwarding aliases) but the parent is the one to script against.
+      if ((tool.description ?? '').startsWith('[DEPRECATED')) {
+        const firstLine = (tool.description ?? '').split('\n')[0] ?? '';
+        warn(`geoly: ${tool.name} is deprecated — ${firstLine.slice(0, 160)}`);
+      }
       const args = buildArguments(parsed, tool);
-      const result = await client.callTool(tool.name, args);
+      const writeApproved = await confirmWrite(tool, args, parsed.reserved.get('yes') === true || parsed.reserved.get('y') === true);
+      const result = await client.callTool(tool.name, args, { writeApproved });
       const value = unwrapToolResult(tool.name, result);
       emitTruncationHints(value);
       printResult(ctx, value);
@@ -101,13 +116,36 @@ export class CallCommand extends Command {
   }
 }
 
+// ---- Write confirmation ---------------------------------------------------
+
+/**
+ * A write tool runs only with an explicit go-ahead: `--yes`, or a [y/N] answered in a
+ * terminal. Piped stdin (a script, an agent) with no `--yes` is a refusal — the error
+ * carries the exact re-run — never a silent mutation. Read tools pass straight through.
+ */
+async function confirmWrite(tool: ToolInfo, args: Record<string, unknown>, yes: boolean): Promise<boolean> {
+  if (!WRITE_TOOLS.has(tool.name)) return true;
+  if (yes) return true;
+  if (!process.stdin.isTTY || !process.stderr.isTTY) return false;
+  const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
+  try {
+    const credits = toolAccess(tool.name) === 'credit-consuming' ? ' and spends monitoring credits' : '';
+    process.stderr.write(`${tool.name} modifies data${credits}.\n  arguments: ${JSON.stringify(args)}\n`);
+    const answer = await new Promise<string>((resolve) => rl.question('  proceed? [y/N] ', resolve));
+    const a = answer.trim().toLowerCase();
+    return a === 'y' || a === 'yes';
+  } finally {
+    rl.close();
+  }
+}
+
 // ---- Parsing --------------------------------------------------------------
 
 /** Split raw proxied args into reserved CLI flags and tool parameter tokens. */
 export function parseCallArgs(rest: string[]): ParsedCall {
   const reserved = new Map<string, string | boolean>();
   const params: Array<[string, string | true]> = [];
-  const boolReserved = new Set(['quiet', 'q', 'refresh', 'no-auto-auth', 'help', 'h']);
+  const boolReserved = new Set(['quiet', 'q', 'refresh', 'no-auto-auth', 'help', 'h', 'yes', 'y']);
 
   for (let i = 0; i < rest.length; i += 1) {
     const token = rest[i]!;
@@ -196,9 +234,67 @@ export function buildArguments(parsed: ParsedCall, tool: ToolInfo): Record<strin
 
   const props = (tool.inputSchema?.properties ?? {}) as Record<string, Record<string, unknown>>;
   for (const [name, raw] of parsed.params) {
+    assertKnownParam(tool, name, props, '--');
     base[name] = coerce(name, raw, props[name]);
   }
+  for (const name of Object.keys(base)) assertKnownParam(tool, name, props, '');
   return base;
+}
+
+/**
+ * A parameter the schema does not declare is a usage error, not a pass-through.
+ *
+ * The server drops unknown keys silently, so before this `--time-range 7d` (hyphen) ran the
+ * default 30-day window, `--brand_id <other org's brand>` on a single-brand token returned the
+ * default brand's numbers, and `--nope 1` cost credits — all exit 0, all wrong data. The schema
+ * is already in hand (`geoly schema <tool>` prints it), so the check is free.
+ */
+export function assertKnownParam(
+  tool: ToolInfo,
+  name: string,
+  props: Record<string, Record<string, unknown>>,
+  prefix: '--' | '',
+): void {
+  const known = Object.keys(props);
+  // No schema at all (a tool that takes anything) — nothing to check against.
+  if (known.length === 0 || tool.inputSchema?.additionalProperties === true) return;
+  if (name in props) return;
+  const where = prefix ? `${prefix}${name}` : `"${name}" in --data/--input`;
+  // brand/org scoping deserves its own words: the parameter is missing *because of the token*,
+  // not because the tool never had it.
+  if (name === 'brand' || name === 'brand_id' || name === 'org_id') {
+    if (name === 'brand' && 'brand_id' in props) {
+      throw new GeolyError('usage_error', `${where} is not a parameter of ${tool.name}; the schema name is brand_id`, {
+        hint: `geoly call ${tool.name} --brand_id <id> …`,
+      });
+    }
+    throw new GeolyError(
+      'usage_error',
+      `${where} is not a parameter of ${tool.name} for this token — it is bound to one brand, so the call would silently run against that brand`,
+      {
+        hint:
+          name === 'org_id'
+            ? 'Switch organization with the global --org <org_id> flag instead.'
+            : 'Use --org <org_id> to switch organization; multi-brand tokens expose brand_id on every brand tool (see `geoly schema ' + tool.name + '`).',
+      },
+    );
+  }
+  throw new GeolyError('usage_error', `${where} is not a parameter of ${tool.name}`, {
+    hint: suggestParam(name, known) ?? `Parameters: ${known.map((k) => `--${k}`).join(', ')}. \`geoly schema ${tool.name}\` shows types.`,
+  });
+}
+
+/** Nearest declared parameter for a typo (`time-range` → `time_range`, `platfrom` → `platform`). */
+function suggestParam(input: string, names: string[]): string | undefined {
+  const needle = input.toLowerCase().replace(/-/g, '_');
+  const close = names.filter((n) => n === needle || n.includes(needle) || needle.includes(n) || sharedPrefix(n, needle) >= 4);
+  return close.length ? `Did you mean --${close[0]}? Declared parameters: ${names.map((k) => `--${k}`).join(', ')}.` : undefined;
+}
+
+function sharedPrefix(a: string, b: string): number {
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i += 1;
+  return i;
 }
 
 /** Coerce a raw CLI token to the schema-declared type. */

@@ -2,7 +2,87 @@
 
 All notable changes to the `geoly-mcp` agent skill.
 
+## 0.5.2
+
+Consolidates the 2026-09-20/21 tool-surface overhaul (geoly-app #1817 + #1796, 15 PRs). Rule of
+the cycle: **tool caliber = page caliber** — every tool below reads the same read model as the
+in-app page it mirrors, and the new ones are exits of pages that had no tool before.
+
+- **New — start here:** `get_brand_context` (free, resident): brand, org, today's three date axes,
+  platforms with data, topics, competitors, data window and remaining credits in one call —
+  replaces the `get_current_date` + `get_competitor_list` + `get_available_platforms` opening.
+  `get_topic_list` (free) is back on the read-only surface: the source of topic ids.
+  `get_public_data_window` (free): the "as of" anchor for every public tool.
+- **New reads:** `get_brand_board` (the /performance board on the **entity** caliber,
+  `caliber=brand_entity_v1`; `status=not-ready` / `no-coverage` are states, not empty data);
+  `list_brand_answers` (the /performance/answers table — every answer, filtered and paginated).
+  `query_analytics` gains `compare_previous=true` (previous window + `delta` per metric, with
+  `days_with_data`).
+- **New writes** (consent Write grant on `prompt`): `archive_prompt` (restore with
+  `restore=true`; archived prompts refuse `trigger_prompt`), `update_prompt_tags`
+  (`add` / `remove` / `rename`), `move_prompts_to_topic` (`topic_id=null` ungroups). Read archived
+  prompts with `get_prompt_list status=archived`. `geoly call` asks `[y/N]` or takes `--yes`
+  (CLI ≥ 0.3.1).
+- **Deprecated, still registered, same response and price** (forwarding aliases; do not start
+  new work on them): `get_competitor_overview` → `get_platform_matrix dimension=competitor`;
+  `get_brand_citations_daily` → `query_analytics dataset=brand_citations_daily`;
+  `get_ga4_page_data` → `get_ga4_traffic_data page_path`;
+  `get_public_brand_perception_aspect_mentions` → `get_public_brand_perception mode=aspect_mentions`;
+  `get_public_search_query_detail` → `get_public_search_queries mode=query_detail|theme_detail`;
+  `get_public_shopping_card_detail` → `get_public_shopping_product_detail mode=card`. Four
+  `get_public_search_queries` modes and four `get_public_brand` / `compare_public_brands` views
+  are retired with a `_deprecated` notice (catalog § Deprecated). `geoly tools --json` flags them.
+- **Caliber changes you will notice in numbers:** `get_citation_overview` / `get_domain_detail` /
+  `get_page_detail` moved to the /citations page window (N whole Asia/Shanghai days on the
+  citation-creation axis plus today; `caliber` + `window` in every response; `legacy` = derived
+  layer unavailable). `get_competitor_list` is the Settings › Brand library (entity layer).
+  `get_sentiment_dashboard` slimmed to distribution / trend / per-platform. Windowed public tools
+  default to the latest published 30d batch window (was: all history) and echo `window`.
+  Details and the "never mix these two" pairs: `references/metric-calibers.md`.
+- **Faster, same numbers:** KPI sides of `query_analytics`, `get_topic_analytics`,
+  `get_platform_matrix(topic)`, `get_sentiment_dashboard`, `get_brand_context` and the three
+  citation tools read the pre-aggregated daily layer (T2 / T1-C) when it is ready and fall back
+  to the live query otherwise — a `tool_error` timeout on a large brand is now the exception.
+  `query_analytics` without `citationCount` no longer runs the citation-side query at all.
+
+## 0.5.1
+
+- **Routing first.** New opening section "which door are you at?": with the `geoly` CLI on PATH,
+  an agent hands the question to `geoly run` instead of rebuilding it from `geoly tools` /
+  `schema` / `call` chains (a headless Claude Code run did exactly that — 15 turns, three timeouts,
+  no answer — because the CLI section was labelled "optional, for loops/exports"). MCP tools are
+  the path only when they are mounted and there is no CLI; the MCP pre-flight is marked MCP-only.
+- CLI section rewritten in that order: `run` (default) → `call` (specific pulls / loops) →
+  bootstrap. `--help` named as the flag reference; `tool_error` on heavy tools = use `run`, not retry.
+- Frontmatter description now names the CLI so the skill triggers for CLI users.
+- Two branches the routing left open: a CLI older than 0.3.0 (no `run`) → `geoly upgrade` first,
+  and if that cannot happen, stay on the CLI in its older `tools` / `schema` / `call` shape rather
+  than falling into the MCP pre-flight. Bootstrap is now decided by shell-vs-browser: a shell
+  without a browser (SSH, container, CI) still bootstraps via `auth login --remote` /
+  `GEOLY_TOKEN`; only hosts with no shell at all skip it for the MCP pre-flight.
+- Door 1 also covers a CLI that is on PATH but not signed in (exit code 3): the CLI signs in
+  lazily by itself — browser when there is one, printed URL + `auth login --code` when there is
+  not, `GEOLY_TOKEN` under `CI=true` — so an agent re-runs the command instead of switching doors.
+
 ## 0.5.0
+
+- *(2026-09-20, server-side caliber change — no skill version bump)* **Competitor tools re-read
+  from the in-app pages:** `get_competitor_polarity` now returns the AI Verdict page's "who beats you"
+  board (`brand_mention_vote.stance = preferred`, top 5, ≥3 answers, votes since 2026-09-08) —
+  `tie` / `weWin` / `netLoss` / `coMentions` / `totalNetLosing` are gone; same parameters as before. `get_risk_context_sources`
+  now returns the Verdict page's Sources tab (`kind`, `citedRecords`, `negativeShare` from own-entity
+  negative aspect votes, `topAspects`, `delta`) and **gains parameters** — `time_range` (7d default =
+  the old fixed window, 30d, custom), `start_date`, `end_date`, `platform` (all optional; a call with
+  no arguments still targets the last 7 days on all entitled platforms) — instead of the fixed 7-day, all-platform window; `lift` is gone.
+  `get_competitor_cooccurrence` keeps its parameters; its competitors come from the
+  brand-entity layer (folded names, `stance`, `mentions`) instead of the legacy
+  `prompt_record.competitors` JSON.
+- **`get_competitor_overview` deprecated** → `get_platform_matrix` (`dimension=competitor`); still
+  registered, **its response shape and its price are unchanged** (`brand` + `competitors[]`,
+  same credits as before), so existing callers keep working — only the description and the
+  hosted agent's resident set changed. Catalog moves it to a "Deprecated" section;
+  `metric-calibers.md` explains why matrix competitor counts can be lower than LLM-judged rows
+  (`count_state = counted` only).
 
 - **CLI `geoly run` (CLI ≥ 0.3.0):** delegate a whole question to GEOly's hosted GEO agent
   (`/api/agent/runs`) from the terminal — one JSON receipt (`status`, `run_id`, `answer`,

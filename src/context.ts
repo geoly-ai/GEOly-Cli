@@ -77,7 +77,12 @@ export function makeCtx(input: CtxInput): Ctx {
     if (!Number.isFinite(timeoutS) || timeoutS <= 0) {
       throw new GeolyError('usage_error', `--timeout must be a positive number of seconds`);
     }
-    timeoutS = Math.min(timeoutS, MAX_TIMEOUT_S);
+    // `--help` says "max 120"; silently clamping 999 → 120 taught agents the flag was elastic.
+    if (timeoutS > MAX_TIMEOUT_S) {
+      throw new GeolyError('usage_error', `--timeout must be at most ${MAX_TIMEOUT_S} seconds, got ${timeoutS}`, {
+        hint: 'For `geoly run`, --timeout bounds each request (connect + first byte); how long to follow a run is --wait.',
+      });
+    }
   }
   const staticToken = process.env.GEOLY_TOKEN?.trim() || undefined;
   const profile = sanitizeProfile(input.profile ?? 'default');

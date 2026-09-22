@@ -59,13 +59,28 @@ output shape (output is `--output json|raw`, everywhere).
 - **`status` is the contract**: `done` / `failed` are final, `running` is not an answer.
   (The server's run log says `succeeded`; the CLI normalises it to `done` everywhere.)
 - **Receipt.** `--output json` (default) prints the server's `done` payload plus `status`:
-  `run_id`, `answer`, `stopped`, `stopped_reason`, `steps`, `tools_used`, `usage`,
-  `credits_cost`, `credits_remaining`, `deliverable` (only with `--spec`), `saved_to`.
-  `--output raw` streams the answer text and ends with the run id on its own line.
+  `run_id`, `question`, `max_credits`, `answer`, `stopped`, `stopped_reason`, `steps`,
+  `tools_used`, `usage`, `credits_cost`, `credits_remaining`, `deliverable` (only with
+  `--spec`), `saved_to`. A lookup (`geoly run <id>`, `runs wait`, a replay) is the server's run
+  row instead: same keys plus `created_at` / `finished_at` / `error`, minus `stopped_reason` /
+  `credits_remaining` (the row does not store them). `--output raw` prints only the answer
+  text on stdout; the run id goes to stderr.
+- **Partial answers.** `stopped: max_steps` means the agent did not finish on its own terms —
+  most often `stopped_reason: budget` (the `--max-credits` cap was hit; the answer is a
+  placeholder, credits were spent). `status` stays `done` and the exit code 0 — nothing
+  failed — but the CLI says so on stderr; scripts should branch on `stopped`, not only `status`.
 - **Receipt file.** Every finished run is also written to `./.geoly/runs/<run_id>.json` under
   the current directory (mode 0600) so agents can read long answers from disk instead of
-  re-running; `--no-save` skips it, `-o <file>` chooses the path (stdout then only prints the
-  path). Add `.geoly/` to `.gitignore`.
+  re-running; `--no-save` skips it, `-o <file>` chooses the path (stdout then prints only
+  `{status, run_id, saved_to}`). A directory that cannot be written is reported on stderr, not
+  silently skipped. Add `.geoly/` to `.gitignore`.
+- **`--timeout` vs `--wait`.** `--timeout` (default 30 s, max 120 — above that is a usage
+  error) bounds each *request*: for `run` that is the wait for response headers (the stream
+  opening, a replay, or an error), never the stream itself. `--wait` is how long to follow the
+  run. A server that never answers fails with exit 6 inside `--timeout`.
+- **`--context @file`** reads the file as text: UTF-8 (BOM stripped) or UTF-16 with a BOM
+  (what Windows PowerShell 5.1 `Out-File` writes). Bytes that are neither are a usage error —
+  the CLI never guesses a code page and never sends mojibake to the agent.
 - **Idempotency.** Each `run` sends `Idempotency-Key = sha256(org, brand, spec, question,
   context, max_credits)` — every input that changes what the server would do, so changing any
   of them (a lower `--max-credits` included) is a new command, not a replay. Re-sending the same
@@ -81,7 +96,11 @@ output shape (output is `--output json|raw`, everywhere).
   parameter names verbatim (including underscores, e.g. `--brand_id`). Booleans are
   presence-based. Arrays/objects take JSON strings. `--data '<json>'` passes the whole
   argument object; `--input -` reads it from stdin. Individual flags override same-name
-  fields from `--data`/`--input`.
+  fields from `--data`/`--input`. **A parameter the tool's schema does not declare is a usage
+  error** (exit 2, with the nearest declared name) — the server drops unknown keys silently,
+  so `--time-range` used to run the default window and `--brand_id` on a single-brand token
+  used to return the default brand's numbers, both exit 0. `--brand`, `--brand_id` and
+  `--org_id` on a tool that lacks them say so explicitly (switch organization with `--org`).
 - **`geoly` with no arguments is the product**: an interactive session. You type, the agent
   works, you watch what it runs. `/help` lists the in-session commands (`/new`, `/memory`,
   `/tools`, `/exit`); Ctrl-C interrupts the running turn without ending the session, Ctrl-D
@@ -180,7 +199,10 @@ Three ways in, picked in this order:
 
 - **stdout**: result JSON only. Pretty-printed in a TTY, compact when piped.
   `--output raw` returns the server's raw text.
-- **stderr**: status and errors. Default is human-readable (What / Why / Hint).
+- **stderr**: status and errors — including command-line parse errors (unknown flag, missing
+  positional, unknown subcommand), which are `usage_error` / exit 2 like every other usage
+  error and honour `--error-format json`; nothing but data is ever written to stdout.
+  Default is human-readable (What / Why / Hint).
   `--error-format json` switches errors to a stable object:
   `{ "kind", "status", "tool", "retryAfter", "hint", "next" }` (`next` = the exact command
   that moves things forward, when one exists)
@@ -206,7 +228,7 @@ prompt — they fail with the named list and the flag to add.
 |---|---|---|
 | 0 | Success | — |
 | 1 | Tool / general error | Read the error object; usually don't retry |
-| 2 | Usage error (bad flag / unknown tool / server rejected the parameters, JSON-RPC -32602) | Fix the command; check `geoly schema` |
+| 2 | Usage error (bad flag / unknown tool / undeclared tool parameter / bad command line — missing positional, unknown subcommand — / server rejected the parameters, JSON-RPC -32602) | Fix the command; check `geoly schema` / `--help` |
 | 3 | Auth (only in CI / `--no-auto-auth` / user cancelled) | Set `GEOLY_TOKEN` or complete browser auth once |
 | 4 | Rate limited — HTTP 429 (after honoring `Retry-After`, max 3 attempts / 60s budget) or the server's in-band `GUARDED_RATE_LIMITED` / `CIRCUIT_OPEN` result (retried once within the same budget when `retry_after_seconds` allows) | Back off `retryAfter`, retryable |
 | 5 | No active subscription (HTTP 402) | Human action required; don't retry |
@@ -232,7 +254,17 @@ feeds `geoly <command> --help`; README mirrors it verbatim.
 
 ## Scope of v0.3
 
-- Read-only: write tools return `kind: write_blocked`. Write support ships in a later
-  release behind explicit `--yes` confirmation.
+- Writes are opt-in per call: a write tool (`archive_prompt`, `update_prompt_tags`,
+  `move_prompts_to_topic`, `create_*`, `trigger_prompt`) runs only after `--yes` or a `[y/N]`
+  answered in a terminal; piped stdin without `--yes` returns `kind: write_blocked` (exit 1)
+  with the exact re-run in `hint`. The server registers write tools only for a single-organization
+  grant with Write ticked on the consent screen; calling one that was not granted returns
+  `kind: grant_missing` (exit 3) naming the resource to tick. `geoly tools --json` marks
+  retired forwarding aliases with `deprecated: true`, and `geoly call` on one prints a one-line
+  deprecation warning on stderr (the call still runs).
+- `geoly run --allow-writes` asks the hosted agent for the same write tools (server
+  `allow_writes`); the server grants them per resource from the same consent Write bits, and a
+  run without the flag or without the grant is read-only. `trigger_prompt` is never available to
+  the hosted agent (it spends monitoring credits per call).
 - Pagination parameters are passed through natively per tool (`page`/`page_size` or
   `limit`/`offset` — see each tool's schema).

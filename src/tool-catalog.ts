@@ -7,31 +7,40 @@
  *
  * 做法：常驻一小组 + `find_tools` 按需把其余的取进来。
  *
- * 常驻集**由真实用量决定，不是我们猜的**：对生产 mcp_call_log 的统计（2026-07~08，
- * 14.3 万次成功调用）显示前 8 个工具就覆盖 83.5%、前 14 个覆盖 90.3%。取到 90% 那档，
- * 再加上入口/发现类与本地工具——绝大多数会话因此一次搜索都不需要。
+ * 常驻集**由真实用量决定，不是我们猜的**——但要看对的用量：第一版按 mcp_call_log
+ * （2026-07~08）定，那是 MCP 客户端（Plaud 式列表↔详情乒乓）的形态；agent 自己回答问题
+ * 时用的是另一批工具。2026-09-20 改按托管 agent 30 天 run 的 tools_used 重排
+ * （geoly-app docs/mcp/TOOL_PERF_AND_SURFACE_ASSESSMENT_2026-09.md §3.2）：旧名单里六个
+ * public 下钻工具 agent 一个月用了 ≤1 次，而引用/竞品/平台矩阵每次都要先 find_tools——
+ * 引用域名题在 find_tools 之后两次超时、烧 94 credits 失败就是它的账。
+ *
+ * 🔴 与服务端 `src/lib/agent-api/tools.ts` 的 `RESIDENT_NAMES` 是同一份名单，改要一起改。
  */
 
-/** 覆盖 ~90% 真实调用的下钻与分析工具（括号内为该月占比）。 */
+/** 托管 agent 30 天 run 里真正高频的下钻与分析工具（括号内为 run 数）。 */
 const HIGH_TRAFFIC = [
-  'get_prompt_citations', // 21.1%
-  'get_prompt_record_detail', // 20.5%
-  'get_prompt_list', // 15.8%
-  'get_public_topic_record_detail', // 10.1%
-  'get_public_topic_prompt_detail', // 5.3%
-  'get_url_reference_detail', // 4.7%
-  'list_prompt_records', // 3.9%
-  'get_prompt_record_summaries', // 2.2%
-  'get_public_source_domain_detail', // 1.5%
-  'get_public_topic_brand_leaderboard', // 1.3%
-  'query_analytics', // 1.2%
-  'list_public_topic_prompts', // 1.0%
-  'get_prompt_detail', // 0.9%
+  'get_brand_overview', // 174
+  'query_analytics', // 85
+  'get_prompt_list', // 81
+  'get_citation_overview', // 67
+  // get_competitor_overview（51）/ get_brand_citations_daily（24）自 2026-09-21 起是
+  // get_platform_matrix dimension=competitor / query_analytics 的弃用转发别名（服务端
+  // #1799 / #1805），常驻的必须是活着的名字——两个父工具都已在名单里。
+  'get_prompt_detail', // 23
+  'get_competitor_polarity', // 23
+  'get_platform_matrix', // 19
+  'get_prompt_citations', // 16
+  'get_brand_search_queries', // 13
+  'get_prompt_record_summaries', // 12
+  'get_prompt_record_detail', // 12
 ];
 
 /** 入口与发现：占比不高，但少了它们连第一步都迈不出去。 */
 const ENTRY_POINTS = [
-  'get_brand_overview',
+  'get_topic_list', // topic id 的来源（服务端 2026-09-20 起才在面上）
+  // get_brand_context：一次定位（品牌/日期/平台/topics/竞品/额度），替代 run 开头的
+  // get_current_date + get_competitor_list + get_available_platforms 那几跳（服务端 #1798）
+  'get_brand_context',
   'get_current_date',
   'search_public_entities',
   'list_organizations',
