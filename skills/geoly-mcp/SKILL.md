@@ -3,7 +3,7 @@ name: geoly-mcp
 description: "Use when querying or reporting on AI brand visibility through GEOly — via the geoly CLI (geoly run / geoly call) or the GEOly MCP server: routing a question to the right entry point, following the org/brand discovery flow, quoting the correct KPI caliber, and avoiding metric-definition pitfalls. Triggers: GEOly; geoly CLI; GEO / AI-visibility reporting; citation rate, mention rate, AIGVR, Share of Model; daily trends; competitor, category whitespace, brand momentum; any call to get_brand_overview / query_analytics / get_prompt_* / get_citation_* / compare_public_brands / get_category_* / get_public_* tools."
 metadata:
   author: geoly
-  version: "0.5.3"
+  version: "0.6.0"
 ---
 
 # GEOly MCP
@@ -149,11 +149,15 @@ guess.
 **5. Resolve the brand before calling brand tools, then orient once with `get_brand_context`.**
 In multi-brand / multi-org mode, call `list_brands` (and first `list_organizations`) and pass
 `brand_id`. If a brand tool errors asking which brand, run the discovery tools first. Once the
-brand is known, call `get_brand_context` **once** (free): it returns the brand and organization,
-today's dates on all three axes (UTC / business day / `record_date_key`), the platforms that
-actually have data in the last 30 days, topic and competitor ids, the data window and remaining
-credits — so you do not spend separate calls on `get_current_date`, `get_competitor_list` or
-`get_available_platforms` afterwards.
+brand is known, call `get_brand_context` **once** (free): it returns the brand and organization
+(with the profile fields and GA4 / Cloudflare readiness), today's dates on all three axes (UTC /
+business day / `record_date_key`), the first-collection state, the entitled platforms and which of
+them have data in the last 30 days, topic ids plus the filter universe (countries, `_none`), the
+tracked competitors on the **entity caliber** (the brand library — same rows as
+`get_competitor_list status="tracked"`, own brand excluded), the data window and remaining
+credits — so you do not spend separate calls on `get_current_date`, `get_topic_list` or
+`get_available_platforms` afterwards; `get_competitor_list` is still the tool for suggestions,
+removed brands and learned spellings.
 
 **6. Recover from errors, don't loop.**
 A `402` / "subscription inactive" or a missing `get_public_*` tool is a gating signal, not a
@@ -172,8 +176,15 @@ public/report tools) and paginate (`currentPage == totalPages`) instead of assum
   - **single** (one org, one brand, or brand-bound token) → brand tools auto-resolve; just call them.
   - **multi-brand** (one org, many brands) → first `list_brands`, then pass `brand_id`.
   - **multi-org** (several orgs) → first `list_organizations`, then `list_brands`, then pass IDs.
+  - `org_id` / `brand_id` are accepted by every brand tool in every mode (0.6.0). A token that
+    cannot reach the requested org/brand gets an explicit error — it never silently falls back to
+    its own default brand. If you see "cannot access org_id …", the token was consented for one
+    org only: re-consent with all organizations (or use a token for that org).
+  - Numeric parameters (`page`, `page_size`, `limit`, …) also accept numeric strings ("2").
   - In every mode, the first brand call of a session is `get_brand_context` (free, one shot):
-    brand + org + today + platforms-with-data + topics + competitors + data window + credits.
+    brand + org (+ profile fields, GA4/Cloudflare readiness) + today + first-run state + platforms
+    (entitled ones included, even at 0 records) + topics + scope filters + entity-layer tracked
+    competitors + data window + credits.
 - **Public discovery flow** (any cross-brand / `get_public_*` work): **① `get_public_data_window`
   (free)** → the "as of" anchor: public collection is a weekly batch and every public page windows
   its figures as "latest PUBLISHED batch day, back 30/60/90 days"; since 2026-09 the windowed
@@ -200,6 +211,11 @@ public/report tools) and paginate (`currentPage == totalPages`) instead of assum
 - **Dates**: take them from `get_brand_context.today` (`record_date_key` is the value the daily
   tools' `date` axis uses — one day behind the Asia/Shanghai business day) before building date
   ranges; `get_current_date` remains for the clock time. `query_analytics` ranges ≤ 366 days.
+  Per-answer rows (`get_prompt_record_detail`, `list_prompt_records`,
+  `get_prompt_record_summaries`, `list_brand_answers`, `get_brand_mention_samples`, raw
+  `get_prompt_citations`) carry `businessDay` (UTC+8
+  `YYYY-MM-DD`, the date the app shows) — quote it, not the calendar date of `recordDate`
+  (stored one day early as `(D−1)T16:00Z`).
 
 ## What costs credits (and what's free)
 
@@ -280,9 +296,10 @@ geoly run "<question>" --max-credits 200                      # cap the spend
 
 - `geoly tools --json` — tool names come from the server at runtime; never assume.
 - `geoly call get_brand_context` (add `--brand_id <id>` in multi-brand orgs) as the first data
-  call of a script: one JSON object with the brand, today's dates, the platforms that have data,
-  topic / competitor ids and remaining credits — feed those into the loop instead of calling
-  `get_current_date` / `get_competitor_list` / `get_available_platforms` per iteration.
+  call of a script: one JSON object with the brand, today's dates, the entitled platforms and
+  which have data, topic ids, the tracked competitors (entity ids + legacy ids) and remaining
+  credits — feed those into the loop instead of calling `get_current_date` /
+  `get_competitor_list` / `get_available_platforms` per iteration.
 - `geoly schema <tool>` for exact parameters; `geoly call <tool> --help` also works.
 - `geoly call <tool> --<param> <value> ...` — flags use schema parameter names **verbatim**
   (`--brand_id`, `--time_range 30d`); arrays/objects take JSON strings; whole-object via
@@ -320,7 +337,7 @@ decide by what you have:**
 ### Self / brand-own
 | You want… | Use |
 |---|---|
-| Orientation first: brand/org, today's dates, platforms with data, topic & competitor ids, credits | `get_brand_context` (free, once per run) |
+| Orientation first: brand/org, today's dates, entitled + with-data platforms, topic & filter ids, entity-layer tracked competitors, credits | `get_brand_context` (free, once per run) |
 | Headline KPI (AIGVR / mention / citation rate, whole window) | `get_brand_overview` |
 | Daily/weekly **trend** of those metrics | `query_analytics` dataset=`brand_citations_daily`, `dimensions=["date","platform"]` |
 | This period **vs the previous one** (week-over-week, month-over-month) with `days_with_data` | `query_analytics` with `compare_previous=true` (per-row `previous.*` / `delta.*`) |
@@ -334,15 +351,17 @@ decide by what you have:**
 | The actual **citation URLs / sources** for a prompt | `get_prompt_citations` (`deduplicate=true` for a source list) |
 | "Which queries never mention us" (blind spots) | `get_prompt_mention_rates` |
 | Citation **domain distribution / ownership** | `get_citation_overview` (counts URLs, not records; window = N whole +08 calendar days + today on the citation-creation axis — read `caliber` + `window` from the response) |
-| One domain / one page deep-dive | `get_domain_detail` / `get_page_detail` (same `caliber` + `window` contract) / `get_url_reference_detail` |
-| Content gaps for a domain | `get_content_opportunities` |
-| Standing **vs competitors** | `get_brand_board` (**entity caliber** — the in-app /performance board: confirmed competitors, `visibility` = mentioned ÷ completed answers, same formula for you; add `topic_ids`/`country` for the scoped entity set, fail-closed) · `get_platform_matrix` `dimension=competitor` (legacy discovered-brand record-weighted — not headline; `get_competitor_overview` is its deprecated alias, same shape) |
+| One domain / one page deep-dive | `get_domain_detail` (the `/sources/citations/<root_domain>` drill-down) / `get_page_detail` (same `caliber` + `window` contract; both return `share` raw 0–1, shown with one decimal — but `get_page_detail` is **not** the pages-tab row: lookup-URL grain and a denominator that keeps redirect links) / `get_url_reference_detail` (tool-only: lookup-URL grain + rolling window, adds ChatGPT search sources — not a page row) |
+| The cited-domain table: per-domain delta, mentioned brands, "mentions you", search / sort / paging | `list_citation_domains` (same read model as the page) |
+| Content gaps (competitor cited there, you not) | `list_citation_domains` with `gap_only=true` (`get_content_opportunities` is deprecated — old semantics, not the page) |
+| Standing **vs competitors** | `get_brand_board` (**entity caliber** — unfiltered it *is* the in-app /performance board: confirmed competitors, `visibility` = mentioned ÷ completed answers, same formula for you; `include_trend=true` for the page's daily chart — **not one point per day**: check `trendLatestDay` (yesterday is often still uncounted) and `trendTruncated` (long windows keep the newest days only). Adding `topic_ids`/`country` switches to `caliber=scoped_open_world_v0`: same row source as the page's filtered board but **different numbers** — the page still shows the legacy merged board there, fail-closed) · `get_platform_matrix` `dimension=competitor` (legacy discovered-brand record-weighted — not headline; `get_competitor_overview` is its deprecated alias, same shape) |
 | How AI *describes* the brand (verbatim) | `get_brand_mention_samples`; vs rivals → `get_competitor_cooccurrence` |
 | Topic-level analysis | `get_topic_list` (ids, free) → `get_topic_analytics` (pass `topic_ids`) or `query_analytics` `topic_citations_daily` for day-level topic trends |
 | Sentiment (brand-wide distribution / daily trend / per platform — no verbatim highlights, use `get_brand_mention_samples` for those) | `get_sentiment_dashboard` |
 | The brand library (own brand + tracked competitors + system suggestions + removed), same rows as Settings › Brand | `get_competitor_list` (competitors = `status="tracked"` and `is_own_brand=false`) |
-| Site AI-readiness audit | `get_audit_list` → `get_audit_detail` |
-| Traffic (if GA4 connected) | `get_ga4_traffic_data` (add `page_path` for one page) |
+| Site AI-readiness audit | `get_audit_list` → `get_audit_detail` (the report header + single-page checks + fix copy in `checksMeta`) → `get_audit_pages` for a site audit's per-page results / `fetch_quality=unusable` pages |
+| Traffic (if GA4 connected) | `get_ga4_traffic_data` (add `page_path` for one page). Whole-site vs AI-referred fields live in the same payload — see the catalog row before quoting a number; the page opens on 7d, the tool defaults to 30d |
+| AI crawlers hitting the site (if Cloudflare connected) | `get_cf_traffic_data` — bots fetching pages, **not** visitors arriving from AI answers (that is `get_ga4_traffic_data`). Two calibers to keep straight: `changes.blockedEvents` is always `null` (never computed), and `blockedEvents[]` is capped at 50 rows (`blocked_events_limit`) — quote per-crawler block counts from the uncapped `blockedCrawlerSummary` |
 | Archived prompts — list them | `get_prompt_list status=archived` (the /prompts Archived tab; no separate read tool). `get_prompt_detail` / `get_prompt_record_detail` work on archived prompts by id |
 | Archive / restore a prompt | `archive_prompt` (write grant; `restore=true` to bring it back; idempotent). Archived prompts refuse `trigger_prompt` until restored |
 | Tag prompts in bulk / rename a tag | `update_prompt_tags` (write grant): `action=add\|remove` with `prompt_ids` + `tags`; `action=rename` with `old_name` + `new_name` |
@@ -388,9 +407,16 @@ which counts URLs); for trends use `query_analytics` dataset=`brand_citations_da
 paginating citations).
 Window rule for the three citation tools (`get_citation_overview` / `get_domain_detail` /
 `get_page_detail`): their `time_range` is **N whole Asia/Shanghai calendar days on the
-citation-creation axis plus today** (matches the /citations page), not the rolling
-`now − N×24h` window of `get_brand_overview` — never subtract one from the other; quote the
-`window` each response returns. `caliber="legacy"` means the derived layer was unavailable and
+citation-creation axis plus today** (matches the /sources/citations page), not the rolling
+`now − N×24h` preset window of `get_brand_overview` (whose `custom` range is instead an exact
++08 business-day span, echoed as full ISO instants) — never subtract one from the other; quote the
+`window` each response returns. Their `platform` (and `list_citation_domains` /
+`get_url_reference_detail`) must be `all` or an **active** platform the brand is entitled to
+(exactly the page's platform chips) — an unknown, un-entitled or retired code (e.g. a
+`claude` / `grok` entry left in an old entitlement list) returns `{ error }` listing the
+allowed codes, never a silent fall-back to all. Shares: the page shows one decimal — format
+the raw `share` (0–1) fields; integer `percentage` / `ownership` points cannot be turned back
+into the page's number. `caliber="legacy"` means the derived layer was unavailable and
 the old query ran instead — its `window` then differs by tool: `get_citation_overview` reports
 `startDay..endDay` **business days (+08)** on `prompt_record.record_date` (the old predicate is
 day-granular, not an instant); `get_domain_detail` / `get_page_detail` report an exact
