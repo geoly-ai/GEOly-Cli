@@ -1,8 +1,8 @@
-/** `geoly auth login|status|logout` — explicit auth management (lazy auth makes login optional). */
+/** `geoly auth login|status|token|logout` — explicit auth management (lazy auth makes login optional). */
 import { Command, Option } from 'clipanion';
 import { Ctx } from '../context.js';
 import { GeolyError } from '../errors.js';
-import { clearCredentials, completeRemoteLogin, loadCredentials, login, shouldUseRemoteFlow, startRemoteLogin } from '../oauth.js';
+import { clearCredentials, completeRemoteLogin, ensureAccessToken, loadCredentials, login, shouldUseRemoteFlow, startRemoteLogin } from '../oauth.js';
 import { printResult, status } from '../output.js';
 import { GeolyCommand } from './base.js';
 
@@ -116,6 +116,34 @@ export class AuthStatusCommand extends GeolyCommand {
       expiresAt: new Date(creds.tokens.expiresAt).toISOString(),
       scope: creds.tokens.scope,
     });
+    return 0;
+  }
+}
+
+/**
+ * `geoly auth token` — print the current access token to stdout so scripts and
+ * your own services can call the GEOly HTTP endpoints (Agent API, MCP) with
+ * `Authorization: Bearer <token>`. Runs the normal sign-in first if there is no
+ * valid token (same rules as any other command). The token is a secret.
+ */
+export class AuthTokenCommand extends GeolyCommand {
+  static paths = [['auth', 'token']];
+  static usage = Command.Usage({
+    category: 'Setup',
+    description: 'Print the current access token (for Authorization: Bearer on the HTTP API). Treat it as a secret.',
+    examples: [
+      ['Call the Agent API with curl', 'curl -H "Authorization: Bearer $(geoly auth token)" https://app.geoly.ai/api/agent/runs'],
+    ],
+  });
+
+  protected async run(ctx: Ctx): Promise<number> {
+    const token = await ensureAccessToken(ctx);
+    // 只把 token 本身写 stdout（便于 $(geoly auth token) 取值）；提示走 stderr
+    process.stdout.write(`${token}
+`);
+    if (process.stdout.isTTY) {
+      status(ctx, 'geoly: this is a secret bearer token — do not paste it into chats, logs or repos');
+    }
     return 0;
   }
 }

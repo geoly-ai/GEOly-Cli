@@ -194,7 +194,7 @@ ${renderExitCodeTable()}
     `,
     examples: [
       ['Ask a question', 'geoly run "how did our visibility move this week?" --brand br_123'],
-      ['Server-defined deliverable with a spend cap', 'geoly run "weekly health" --spec weekly-brand-health --max-credits 300'],
+      ['Server-defined deliverable with a spend cap', 'geoly run "weekly health" --spec geo-weekly-brand-health --max-credits 300'],
       ['Stream the answer as text', 'geoly run --output raw "which sources cite us most?"'],
       ['Look up an earlier run', 'geoly run run_01J…'],
       ['Start and return immediately', 'geoly run --no-wait "compare us with EcoFlow on ChatGPT"'],
@@ -203,7 +203,7 @@ ${renderExitCodeTable()}
 
   question = Option.String({ required: true, name: 'question | run_id' });
   brand = Option.String('--brand', { description: 'Brand id to bind the run to (defaults to the token brand)' });
-  spec = Option.String('--spec', { description: 'Server-defined deliverable spec (e.g. weekly-brand-health, content-brief)' });
+  spec = Option.String('--spec', { description: 'Server-defined deliverable spec (e.g. geo-weekly-brand-health, geo-content-brief, geo-serp-gap, geo-keyword-research-report)' });
   extraContext = Option.String('--context', { description: 'Extra input for the agent; @file reads a file' });
   maxCredits = Option.String('--max-credits', { description: 'Cap this run\'s spend (credits, 25..2000)' });
   allowWrites = Option.Boolean('--allow-writes', false, {

@@ -10,7 +10,7 @@
 import { Builtins, Cli } from 'clipanion';
 import { EXIT } from './errors.js';
 import { AskCommand } from './commands/ask.js';
-import { AuthLoginCommand, AuthLogoutCommand, AuthStatusCommand } from './commands/auth.js';
+import { AuthLoginCommand, AuthLogoutCommand, AuthStatusCommand, AuthTokenCommand } from './commands/auth.js';
 import { CallCommand } from './commands/call.js';
 import { ChatCommand } from './commands/chat.js';
 import { CompletionsCommand } from './commands/completions.js';
@@ -54,6 +54,7 @@ cli.register(WhoamiCommand);
 cli.register(InitCommand);
 cli.register(AuthLoginCommand);
 cli.register(AuthStatusCommand);
+cli.register(AuthTokenCommand);
 cli.register(AuthLogoutCommand);
 cli.register(UpgradeCommand);
 cli.register(CompletionsCommand);

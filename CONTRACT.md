@@ -26,6 +26,7 @@ geoly runs list [--brand <id>] [--limit <n>]
 geoly credits
 geoly auth login [--profile <name>] [--no-browser] [--remote] [--code <code>]
 geoly auth status
+geoly auth token      # prints the current access token to stdout (secret; for Authorization: Bearer)
 geoly auth logout
 geoly whoami
 geoly tools [--json] [--refresh]

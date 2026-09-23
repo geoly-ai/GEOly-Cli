@@ -60,6 +60,13 @@ and without a display. Servers and CI use a token instead:
 export GEOLY_TOKEN=geom_xxxxxxxx   # server / CI — never triggers a browser
 ```
 
+**Calling the HTTP API from your own code.** After signing in, `geoly auth token` prints the
+current access token (a secret) for `Authorization: Bearer …` on the Agent API and MCP endpoints:
+
+```sh
+curl -H "Authorization: Bearer $(geoly auth token)"   "https://app.geoly.ai/api/agent/runs?limit=5&org_id=<org_id>"
+```
+
 **Long runs.** `geoly run` follows a run for up to 100 s. If it is still going, the command
 exits 0 with `{"status":"running","run_id":…,"next":"geoly runs wait …"}` — the run keeps
 going on the server; run the `next` command to pick it up. The full receipt is also written to
