@@ -9,7 +9,7 @@
  * Credentials and error mapping are shared with McpClient so `geoly ask` fails
  * the same way `geoly call` does.
  */
-import { Ctx, MAX_TIMEOUT_S, autoAuthAllowed } from './context.js';
+import { API_KEY_REJECTED_HINT, Ctx, MAX_TIMEOUT_S, autoAuthAllowed } from './context.js';
 import { clientTimeoutError, isAbortError } from './deadline.js';
 import { GeolyError } from './errors.js';
 import { ensureAccessToken } from './oauth.js';
@@ -263,7 +263,7 @@ export async function authedFetch(ctx: Ctx, url: string, init: RequestInit, dead
       throw new GeolyError('auth_expired', 'Authentication failed (HTTP 401)', {
         status: 401,
         hint: ctx.staticToken
-          ? 'GEOLY_TOKEN was rejected — legacy tokens can no longer be created; unset it and run `geoly auth login` instead.'
+          ? API_KEY_REJECTED_HINT
           : 'Run `geoly auth login` (use --remote on headless machines).',
         next: ctx.staticToken ? undefined : 'geoly auth login',
       });

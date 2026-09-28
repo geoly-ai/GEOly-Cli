@@ -100,7 +100,9 @@ export class AuthStatusCommand extends GeolyCommand {
 
   protected async run(ctx: Ctx): Promise<number> {
     if (ctx.staticToken) {
-      printResult(ctx, { mode: 'static-token', source: 'GEOLY_TOKEN', readOnly: true, endpoint: ctx.endpoint });
+      // An API key's permissions are per key (read, plus any write tools granted in Settings →
+      // Developers → API keys); `geoly whoami` asks the server and lists the granted writeTools.
+      printResult(ctx, { mode: 'api-key', source: 'GEOLY_TOKEN', endpoint: ctx.endpoint, permissions: 'see `geoly whoami` (writeTools)' });
       return 0;
     }
     const creds = loadCredentials(ctx);

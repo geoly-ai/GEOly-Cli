@@ -9,7 +9,7 @@
  * 402 subscription) to honor the CLI's error contract.
  */
 import { ToolsCacheFile, cachePath, readJson, writeJson } from './config.js';
-import { Ctx, autoAuthAllowed } from './context.js';
+import { API_KEY_REJECTED_HINT, Ctx, autoAuthAllowed } from './context.js';
 import { advertisedBudgetMs, clientTimeoutError, isAbortError, startDeadline, toolDeadlineMs } from './deadline.js';
 import { GeolyError } from './errors.js';
 import { ensureAccessToken, parseRetryAfter, sleep } from './oauth.js';
@@ -94,7 +94,11 @@ export function toolAccess(name: string): ToolAccess {
 export function writeGrantHint(name: string, ctx: Ctx): string {
   const resource = WRITE_TOOL_RESOURCE[name] ?? 'that resource';
   if (ctx.staticToken) {
-    return `GEOLY_TOKEN tokens are read-only. Unset it and run \`geoly auth login\`, then tick Write › ${resource} on the consent screen.`;
+    // An API key carries whatever write permissions it was created with; this one lacks this resource.
+    return (
+      `The API key in GEOLY_TOKEN has no Write permission for ${resource}. Create a key with that write permission ` +
+      `in Settings → Developers → API keys — or unset GEOLY_TOKEN, run \`geoly auth login\` and tick Write › ${resource} on the consent screen.`
+    );
   }
   return (
     `This authorization has no Write grant for ${resource}. Run \`geoly auth login\` again, ` +
@@ -202,7 +206,7 @@ export class McpClient {
             status: 401,
             tool: opts.tool,
             hint: this.ctx.staticToken
-              ? 'GEOLY_TOKEN was rejected — legacy tokens can no longer be created; unset it and run `geoly auth login` instead.'
+              ? API_KEY_REJECTED_HINT
               : 'Run `geoly auth login` (use --no-browser on headless machines).',
           });
         }

@@ -46,6 +46,15 @@ export interface CtxInput {
   remote?: boolean;
 }
 
+/**
+ * 401 hint when GEOLY_TOKEN is set. GEOLY_TOKEN takes an API key (`geom_…`) created in
+ * Settings → Developers → API keys; such keys are current, not legacy, and can carry write
+ * permissions — so the old "legacy tokens can no longer be created" wording sent people away
+ * from the right fix.
+ */
+export const API_KEY_REJECTED_HINT =
+  'GEOLY_TOKEN was rejected — the API key may be revoked, expired or mistyped. Create a new one in Settings → Developers → API keys, or unset GEOLY_TOKEN and run `geoly auth login`.';
+
 /** Ordinary requests (tool list, lookups, `geoly run` headers). Tool calls: see deadline.ts. */
 const DEFAULT_TIMEOUT_S = 30;
 /** Upper bound for an explicit `--timeout`; also caps a server-derived tool deadline. */

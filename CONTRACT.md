@@ -204,7 +204,10 @@ Three ways in, picked in this order:
    fails with exit 3 and `next: geoly auth login --code <code>` — it cannot block on a paste
    that may come from another window. A pending sign-in is reused by later commands rather
    than restarted, and only one is started per process.
-3. **`GEOLY_TOKEN`** (static `geom_` token): read-only, never opens a browser. Servers and CI.
+3. **`GEOLY_TOKEN`** (an API key, `geom_…`, created in Settings → Developers → API keys): never
+   opens a browser. Servers and CI. Its permissions are whatever the key was granted — read,
+   plus any write tools chosen when the key was created; `geoly whoami` reports `auth: api-key`
+   and the granted `writeTools`.
 
 - Auto-degrade: when `CI=true`, `GEOLY_NO_AUTO_AUTH=1`, or `--no-auto-auth` is set, missing
   credentials fail fast with exit code 3 instead of blocking.
