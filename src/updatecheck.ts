@@ -1,19 +1,44 @@
 /**
- * Daily, best-effort update notice (contract §2): checked at most once per
- * 24h, 1.5s network budget, TTY-only, never throws, never blocks the result.
+ * Daily, best-effort update check (contract §Update): at most once per 24h, never throws,
+ * never blocks the result.
+ *
+ * - Released binaries (auto-update on): hand off to a detached `geoly upgrade --auto` child —
+ *   works for scripts and agent hosts too, not just terminals. The next interactive run prints
+ *   one line about what it installed.
+ * - Auto-update off (`GEOLY_NO_AUTO_UPDATE=1`, CI, dev checkout): the old TTY-only notice.
+ * - Skill freshness in agent hosts stays a TTY nudge either way (1.5s budget).
  */
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { LAST_UPDATE_CHECK_PATH, ensureDir } from './config.js';
+import {
+  AUTO_UPDATE_CHILD_ENV,
+  autoUpdateDisabledReason,
+  spawnBackgroundUpdate,
+  takeAutoUpdateMarker,
+} from './selfupdate.js';
 import { SKILL_NAME, hostsWithSkill, installedVersion } from './skills.js';
 import { DEFAULT_ENDPOINT, VERSION, resolveManifestUrl } from './version.js';
 
 const CHECK_INTERVAL_MS = 24 * 3600 * 1000;
 
 export async function maybeNotifyUpdate(): Promise<void> {
+  if (process.env[AUTO_UPDATE_CHILD_ENV]) return;
+  const tty = process.stderr.isTTY === true;
   try {
-    if (!process.stderr.isTTY) return;
+    if (tty) {
+      const done = takeAutoUpdateMarker();
+      if (done) process.stderr.write(`geoly: updated v${done.from} → v${done.to} in the background\n`);
+    }
+  } catch {
+    /* best-effort */
+  }
+
+  const autoOff = autoUpdateDisabledReason();
+  // Without auto-update there is nothing to do off a terminal (the notice is the only output).
+  if (autoOff && !tty) return;
+  try {
     const last = Number(fs.readFileSync(LAST_UPDATE_CHECK_PATH, 'utf8'));
     if (Number.isFinite(last) && Date.now() - last < CHECK_INTERVAL_MS) return;
   } catch {
@@ -22,7 +47,9 @@ export async function maybeNotifyUpdate(): Promise<void> {
   try {
     ensureDir();
     fs.writeFileSync(LAST_UPDATE_CHECK_PATH, String(Date.now()));
-    const [binary, skill] = await Promise.all([checkBinary(), checkSkill()]);
+    const autoStarted = !autoOff && spawnBackgroundUpdate();
+    if (!tty) return;
+    const [binary, skill] = await Promise.all([autoStarted ? undefined : checkBinary(), checkSkill()]);
     if (binary) process.stderr.write(`${binary}\n`);
     if (skill) process.stderr.write(`${skill}\n`);
   } catch {

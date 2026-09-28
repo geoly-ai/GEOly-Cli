@@ -81,7 +81,7 @@ export class CallCommand extends Command {
       const args = buildArguments(parsed, tool);
       const writeApproved = await confirmWrite(tool, args, parsed.reserved.get('yes') === true || parsed.reserved.get('y') === true);
       const result = await client.callTool(tool.name, args, { writeApproved });
-      const value = unwrapToolResult(tool.name, result);
+      const value = liftUpgradeNotice(unwrapToolResult(tool.name, result));
       emitTruncationHints(value);
       printResult(ctx, value);
       await maybeNotifyUpdate();
@@ -360,6 +360,20 @@ export function truncationWarning(value: unknown): string | undefined {
     return `geoly: page ${v.currentPage}/${v.totalPages} — request the next page for more`;
   }
   return undefined;
+}
+
+/**
+ * The server tags one result a day with `_geoly_cli_upgrade` when this binary is behind (its
+ * only channel to scripts that never see a terminal). It is status, not data: say it on stderr
+ * and keep stdout exactly what the tool returned.
+ */
+function liftUpgradeNotice(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const { _geoly_cli_upgrade: notice, ...rest } = value as Record<string, unknown>;
+  if (notice === undefined) return value;
+  const message = (notice as { message?: unknown })?.message;
+  if (typeof message === 'string') warn(`geoly: ${message}`);
+  return rest;
 }
 
 function fallbackCtx(): Ctx {
