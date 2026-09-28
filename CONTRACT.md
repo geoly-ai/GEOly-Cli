@@ -230,8 +230,10 @@ Three ways in, picked in this order:
   `subscription_required` and `quota_exhausted` both arrive as HTTP 402 but need opposite
   responses: the first means there is no active subscription, the second means the plan is
   active and this period's AI Credits are spent (the hint carries the reset date).
-- Truncation/pagination signals from the server (`_truncated`, `hasMore`, `totalPages`) are
-  preserved in the payload; the CLI adds a stderr hint when they appear.
+- Truncation/pagination signals from the server (`_truncated: true`, `hasMore`, `totalPages`) are
+  preserved in the payload; the CLI adds a stderr hint when they appear. A `_truncated` value
+  that is not literally `true` (some tools return a counts object there on a complete answer)
+  is not a truncation signal.
 
 ## Organization resolution
 

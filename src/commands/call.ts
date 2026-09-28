@@ -333,15 +333,33 @@ function coerce(name: string, raw: string | true, schema: Record<string, unknown
 
 /** Surface server truncation/pagination signals on stderr (contract §6). */
 function emitTruncationHints(value: unknown): void {
-  if (!value || typeof value !== 'object') return;
+  const message = truncationWarning(value);
+  if (message) warn(message);
+}
+
+/**
+ * The stderr line for a truncated / paginated result, if any.
+ *
+ * Server-side truncation has exactly one marker: geoly-app `truncateToolOutput` replaces an
+ * over-cap result with `{ _truncated: true, _totalCount, _shownCount, _message, items }`. Only
+ * `_truncated === true` counts — some tools (e.g. get_public_topic_record_detail) use a
+ * `_truncated` *object* of pre-cap counts on a complete answer, and a truthiness check warned
+ * "truncated" on every one of those.
+ */
+export function truncationWarning(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object') return undefined;
   const v = value as Record<string, unknown>;
-  if (v._truncated) {
-    warn('geoly: result was truncated by the server — narrow the date range or paginate');
-  } else if (v.hasMore === true) {
-    warn('geoly: more rows available — increase offset/limit or request the next page');
-  } else if (typeof v.totalPages === 'number' && typeof v.currentPage === 'number' && v.currentPage < v.totalPages) {
-    warn(`geoly: page ${v.currentPage}/${v.totalPages} — request the next page for more`);
+  if (v._truncated === true) {
+    const shown = typeof v._shownCount === 'number' ? v._shownCount : undefined;
+    const total = typeof v._totalCount === 'number' ? v._totalCount : undefined;
+    const counts = shown !== undefined && total !== undefined ? ` (${shown} of ${total} shown)` : '';
+    return `geoly: result was truncated by the server${counts} — narrow the date range or paginate`;
   }
+  if (v.hasMore === true) return 'geoly: more rows available — increase offset/limit or request the next page';
+  if (typeof v.totalPages === 'number' && typeof v.currentPage === 'number' && v.currentPage < v.totalPages) {
+    return `geoly: page ${v.currentPage}/${v.totalPages} — request the next page for more`;
+  }
+  return undefined;
 }
 
 function fallbackCtx(): Ctx {

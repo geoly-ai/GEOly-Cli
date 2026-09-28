@@ -14,7 +14,9 @@
  *  7. a server TOOL_TIMEOUT that takes longer than a short `--timeout` but fits the advertised
  *     budget is received and shown verbatim, with retryAfter (the production failure);
  *  8. a fresh client that did not list tools reads the budget from the on-disk tools cache;
- *  9. `geoly runs wait`'s GET aborted mid-body → kind `timeout`, not a raw `tool_error`.
+ *  9. `geoly runs wait`'s GET aborted mid-body → kind `timeout`, not a raw `tool_error`;
+ * 10. the "truncated by the server" warning fires only on the real marker (`_truncated: true`),
+ *     not on a `_truncated` counts object some tools return with a complete answer.
  */
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -31,6 +33,7 @@ import {
 } from '../src/deadline.js';
 import { McpClient, unwrapToolResult } from '../src/mcp.js';
 import { getRun } from '../src/runs.js';
+import { truncationWarning } from '../src/commands/call.js';
 
 const TOOL_TIMEOUT_TEXT =
   'TOOL_TIMEOUT: server_timeout timed out and was fully refunded. Narrow the time window / reduce scope, or retry the SAME call once after ~60s.\n' +
@@ -201,6 +204,11 @@ async function main(): Promise<void> {
   // 9. Agent API GET aborted mid-body
   const run = await caught(getRun({ ...ctx, timeoutMs: 300 }, 'run_slowbody'));
   check('9 runs wait GET stalls mid-body → kind timeout (not tool_error)', run?.kind === 'timeout' && run.exitCode === 6, `${run?.kind}: ${run?.message}`);
+
+  // 10. truncation marker
+  check('10a real server truncation warns, with counts', /truncated by the server \(20 of 350 shown\)/.test(truncationWarning({ _truncated: true, _totalCount: 350, _shownCount: 20, _message: 'm', items: [] }) ?? ''));
+  check('10b _truncated counts object (complete answer) → no warning', truncationWarning({ record: {}, _truncated: { citations: 120, searchSources: 40 } }) === undefined);
+  check('10c hasMore still hinted', /more rows available/.test(truncationWarning({ hasMore: true }) ?? ''));
 
   for (const s of openSockets) s.destroy();
   server.close();
