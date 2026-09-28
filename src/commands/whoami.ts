@@ -22,7 +22,9 @@ export class WhoamiCommand extends GeolyCommand {
     const mode = names.has('list_organizations') ? 'multi-org' : names.has('list_brands') ? 'multi-brand' : 'single';
     const creds = ctx.staticToken ? undefined : loadCredentials(ctx);
     printResult(ctx, {
-      auth: ctx.staticToken ? 'static-token (read-only)' : 'oauth',
+      // GEOLY_TOKEN holds an API key whose permissions are set per key — `writeTools` below is
+      // what the server actually granted it; the CLI does not assume read-only.
+      auth: ctx.staticToken ? 'api-key' : 'oauth',
       profile: ctx.profile,
       endpoint: ctx.endpoint,
       org: ctx.org ?? null,
@@ -31,7 +33,8 @@ export class WhoamiCommand extends GeolyCommand {
       mode,
       toolCount: tools.length,
       publicToolsEnabled: [...names].some((n) => n.startsWith('get_public_') || n === 'compare_public_brands'),
-      // Write tools appear only when the consent grant covers them (single-org grant + Write ticked).
+      // Write tools appear only when the grant covers them: an OAuth consent (single-org grant +
+      // Write ticked) or an API key created with those write permissions.
       writeTools: [...names].filter((n) => WRITE_TOOLS.has(n)).sort(),
     });
     return 0;

@@ -14,6 +14,14 @@ export type ErrorKind =
   /** Subscribed, but this period's AI Credits are used up — a different fix entirely. */
   | 'quota_exhausted'
   | 'upstream_unavailable'
+  /**
+   * The CLI's own deadline ran out before the server answered — before the response headers or
+   * while the body was still streaming. Distinct from `upstream_unavailable` (the server or the
+   * network said something went wrong): here nothing went wrong yet, the answer just did not
+   * arrive in time and the server may still be working. Same exit code as upstream trouble (6):
+   * the right move is the same — one retry after a short back-off, or a longer `--timeout`.
+   */
+  | 'timeout'
   | 'tool_error'
   | 'usage_error'
   | 'write_blocked';
@@ -42,7 +50,7 @@ export const EXIT_CODE_TABLE: ReadonlyArray<{ code: number; meaning: string }> =
   { code: 3, meaning: 'auth — no valid credentials (run `geoly auth login`)' },
   { code: 4, meaning: 'rate limited — honor `retryAfter` before retrying' },
   { code: 5, meaning: 'subscription required — the organization has no active plan' },
-  { code: 6, meaning: 'upstream unavailable — network / gateway trouble; a short back-off then retry is reasonable' },
+  { code: 6, meaning: 'upstream unavailable or timed out (kind `timeout`) — network / gateway trouble, or no answer within the deadline; a short back-off then one retry is reasonable' },
   { code: 7, meaning: "credits exhausted — this period's credits are used up" },
 ];
 
@@ -58,6 +66,7 @@ const KIND_EXIT: Record<ErrorKind, number> = {
   subscription_required: EXIT.subscription!,
   quota_exhausted: EXIT.quota!,
   upstream_unavailable: EXIT.upstream!,
+  timeout: EXIT.upstream!,
   tool_error: EXIT.general!,
   usage_error: EXIT.usage!,
   write_blocked: EXIT.general!,
@@ -82,6 +91,10 @@ export interface GeolyErrorOptions {
    * sign-in was started: `geoly auth login --code <code>`). Agents run it verbatim.
    */
   next?: string;
+  /** kind `timeout`: the client-side deadline that ran out, in milliseconds. */
+  deadlineMs?: number;
+  /** kind `timeout`: the tool's server-side time budget as advertised in tools/list, when known. */
+  serverBudgetMs?: number;
 }
 
 export class GeolyError extends Error {
@@ -92,6 +105,8 @@ export class GeolyError extends Error {
   readonly hint?: string;
   readonly retryable: boolean;
   readonly next?: string;
+  readonly deadlineMs?: number;
+  readonly serverBudgetMs?: number;
 
   constructor(kind: ErrorKind, message: string, opts: GeolyErrorOptions = {}) {
     super(message, opts.cause !== undefined ? { cause: opts.cause } : undefined);
@@ -103,6 +118,8 @@ export class GeolyError extends Error {
     this.retryAfter = opts.retryAfter;
     this.hint = opts.hint;
     this.next = opts.next;
+    this.deadlineMs = opts.deadlineMs;
+    this.serverBudgetMs = opts.serverBudgetMs;
   }
 
   get exitCode(): number {
@@ -117,6 +134,9 @@ export class GeolyError extends Error {
     if (this.retryAfter !== undefined) out.retryAfter = this.retryAfter;
     if (this.hint !== undefined) out.hint = this.hint;
     if (this.next !== undefined) out.next = this.next;
+    // Seconds, like retryAfter — an agent compares them with the --timeout it passed.
+    if (this.deadlineMs !== undefined) out.deadlineSeconds = this.deadlineMs / 1000;
+    if (this.serverBudgetMs !== undefined) out.serverBudgetSeconds = this.serverBudgetMs / 1000;
     return out;
   }
 }

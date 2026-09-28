@@ -9,7 +9,8 @@
  * 402 subscription) to honor the CLI's error contract.
  */
 import { ToolsCacheFile, cachePath, readJson, writeJson } from './config.js';
-import { Ctx, autoAuthAllowed } from './context.js';
+import { API_KEY_REJECTED_HINT, Ctx, autoAuthAllowed } from './context.js';
+import { advertisedBudgetMs, clientTimeoutError, isAbortError, startDeadline, toolDeadlineMs } from './deadline.js';
 import { GeolyError } from './errors.js';
 import { ensureAccessToken, parseRetryAfter, sleep } from './oauth.js';
 import { warn } from './output.js';
@@ -93,7 +94,11 @@ export function toolAccess(name: string): ToolAccess {
 export function writeGrantHint(name: string, ctx: Ctx): string {
   const resource = WRITE_TOOL_RESOURCE[name] ?? 'that resource';
   if (ctx.staticToken) {
-    return `GEOLY_TOKEN tokens are read-only. Unset it and run \`geoly auth login\`, then tick Write › ${resource} on the consent screen.`;
+    // An API key carries whatever write permissions it was created with; this one lacks this resource.
+    return (
+      `The API key in GEOLY_TOKEN has no Write permission for ${resource}. Create a key with that write permission ` +
+      `in Settings → Developers → API keys — or unset GEOLY_TOKEN, run \`geoly auth login\` and tick Write › ${resource} on the consent screen.`
+    );
   }
   return (
     `This authorization has no Write grant for ${resource}. Run \`geoly auth login\` again, ` +
@@ -106,6 +111,17 @@ export interface ToolInfo {
   description?: string;
   inputSchema?: Record<string, unknown>;
   title?: string;
+  /** Server metadata; `_meta["geoly/timeoutMs"]` is the tool's server-side time budget. */
+  _meta?: Record<string, unknown>;
+}
+
+/** Per-request deadline options for {@link McpClient.request}. */
+export interface RequestOptions {
+  tool?: string;
+  /** Deadline for this request (headers + body). Defaults to `ctx.timeoutMs`. */
+  timeoutMs?: number;
+  /** The tool's advertised server budget — only used to explain a client timeout. */
+  serverBudgetMs?: number;
 }
 
 interface JsonRpcResponse {
@@ -138,109 +154,138 @@ export class McpClient {
    * Send one JSON-RPC request. Handles: lazy auth on 401 (one retry after a
    * fresh browser flow), Retry-After-honoring 429 back-off, 402/403/5xx
    * mapping, and SSE response bodies.
+   *
+   * One deadline per attempt covers the whole exchange — connect, headers AND the body. When it
+   * fires, the error is kind `timeout` wherever the abort landed (the server sends SSE headers
+   * at once, so it usually lands mid-body); only a body that arrived and cannot be parsed is
+   * `upstream_unavailable: Could not parse…`.
    */
-  async request<T>(method: string, params: unknown, opts: { tool?: string } = {}): Promise<T> {
+  async request<T>(method: string, params: unknown, opts: RequestOptions = {}): Promise<T> {
     let token = await ensureAccessToken(this.ctx);
     let authRetried = false;
     let attempts = 0;
     const budgetEnd = Date.now() + RATE_LIMIT_BUDGET_MS;
+    const deadlineMs = opts.timeoutMs ?? this.ctx.timeoutMs;
+    const timeoutError = (cause: unknown): GeolyError =>
+      clientTimeoutError({ deadlineMs, serverBudgetMs: opts.serverBudgetMs, tool: opts.tool, what: opts.tool ?? method, cause });
 
     for (;;) {
       attempts += 1;
-      let res: Response;
       const id = ++rpcId;
+      const deadline = startDeadline(deadlineMs);
       try {
-        res = await fetch(this.url(), {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            accept: 'application/json, text/event-stream',
-            authorization: `Bearer ${token}`,
-            'mcp-protocol-version': MCP_PROTOCOL_VERSION,
-            'x-client-name': 'geoly-cli',
-            'x-client-version': VERSION,
-          },
-          body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
-          signal: AbortSignal.timeout(this.ctx.timeoutMs),
-        });
-      } catch (err) {
-        const timedOut = err instanceof Error && err.name === 'TimeoutError';
-        throw new GeolyError(
-          'upstream_unavailable',
-          timedOut ? `Request timed out after ${this.ctx.timeoutMs / 1000}s` : `Network error: ${(err as Error).message}`,
-          { tool: opts.tool, cause: err },
+        let res: Response;
+        try {
+          res = await fetch(this.url(), {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              accept: 'application/json, text/event-stream',
+              authorization: `Bearer ${token}`,
+              'mcp-protocol-version': MCP_PROTOCOL_VERSION,
+              'x-client-name': 'geoly-cli',
+              'x-client-version': VERSION,
+            },
+            body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
+            signal: deadline.signal,
+          });
+        } catch (err) {
+          if (deadline.fired()) throw timeoutError(err);
+          throw new GeolyError('upstream_unavailable', `Network error: ${(err as Error).message}`, { tool: opts.tool, cause: err });
+        }
+
+        if (res.status === 401) {
+          await res.arrayBuffer().catch(() => undefined);
+          if (!authRetried && !this.ctx.staticToken && autoAuthAllowed(this.ctx)) {
+            authRetried = true;
+            deadline.clear(); // an interactive re-auth may take minutes; it is not part of the deadline
+            token = await ensureAccessToken(this.ctx, true); // token expired → re-run browser flow
+            continue;
+          }
+          throw new GeolyError('auth_expired', 'Authentication failed (HTTP 401)', {
+            status: 401,
+            tool: opts.tool,
+            hint: this.ctx.staticToken
+              ? API_KEY_REJECTED_HINT
+              : 'Run `geoly auth login` (use --no-browser on headless machines).',
+          });
+        }
+        if (res.status === 402) {
+          await res.arrayBuffer().catch(() => undefined);
+          throw new GeolyError('subscription_required', 'Subscription is inactive for this organization (HTTP 402)', {
+            status: 402,
+            tool: opts.tool,
+            hint: 'Renew the plan at https://www.geoly.ai — then retry.',
+          });
+        }
+        if (res.status === 403) {
+          await res.arrayBuffer().catch(() => undefined);
+          throw new GeolyError('grant_missing', 'This authorization does not grant access to the requested resource (HTTP 403)', {
+            status: 403,
+            tool: opts.tool,
+            hint: 'Re-run `geoly auth login` and approve the needed permissions on the consent screen.',
+          });
+        }
+        if (res.status === 429) {
+          const retryAfter = parseRetryAfter(res.headers.get('retry-after')) ?? 2 ** attempts;
+          await res.arrayBuffer().catch(() => undefined);
+          const waitMs = retryAfter * 1000;
+          if (attempts < RATE_LIMIT_MAX_ATTEMPTS && Date.now() + waitMs < budgetEnd) {
+            deadline.clear(); // the back-off is not part of the next attempt's deadline
+            warn(`geoly: rate limited — retrying in ${retryAfter}s (${attempts}/${RATE_LIMIT_MAX_ATTEMPTS})`);
+            await sleep(waitMs);
+            continue;
+          }
+          throw new GeolyError('rate_limited', 'Rate limited and retry budget exhausted (HTTP 429)', {
+            status: 429,
+            retryAfter,
+            tool: opts.tool,
+          });
+        }
+        if (!res.ok) {
+          await res.arrayBuffer().catch(() => undefined);
+          throw new GeolyError('upstream_unavailable', `GEOly service error (HTTP ${res.status})`, {
+            status: res.status,
+            tool: opts.tool,
+            hint: 'Transient — a short back-off then retry is reasonable.',
+          });
+        }
+
+        const rpc = await parseRpcBody(res, opts.tool, (err) =>
+          deadline.fired() || (isAbortError(err) && deadline.signal.aborted) ? timeoutError(err) : undefined,
         );
-      }
-
-      if (res.status === 401) {
-        await res.arrayBuffer().catch(() => undefined);
-        if (!authRetried && !this.ctx.staticToken && autoAuthAllowed(this.ctx)) {
-          authRetried = true;
-          token = await ensureAccessToken(this.ctx, true); // token expired → re-run browser flow
-          continue;
+        if (rpc.error) {
+          // -32602 = the server's schema validation rejected the arguments before anything ran:
+          // that is the caller's mistake (usage, exit 2), not a tool failure (exit 1). Agents
+          // branch on this to fix the call instead of retrying or blaming the service.
+          const invalidParams = rpc.error.code === -32602;
+          throw new GeolyError(invalidParams ? 'usage_error' : 'tool_error', rpc.error.message || 'Tool call failed', {
+            tool: opts.tool,
+            cause: rpc.error,
+            hint: invalidParams ? `Check the parameters with: geoly schema ${opts.tool ?? '<tool>'}` : undefined,
+          });
         }
-        throw new GeolyError('auth_expired', 'Authentication failed (HTTP 401)', {
-          status: 401,
-          tool: opts.tool,
-          hint: this.ctx.staticToken
-            ? 'GEOLY_TOKEN was rejected — legacy tokens can no longer be created; unset it and run `geoly auth login` instead.'
-            : 'Run `geoly auth login` (use --no-browser on headless machines).',
-        });
+        return rpc.result as T;
+      } finally {
+        deadline.clear();
       }
-      if (res.status === 402) {
-        await res.arrayBuffer().catch(() => undefined);
-        throw new GeolyError('subscription_required', 'Subscription is inactive for this organization (HTTP 402)', {
-          status: 402,
-          tool: opts.tool,
-          hint: 'Renew the plan at https://www.geoly.ai — then retry.',
-        });
-      }
-      if (res.status === 403) {
-        await res.arrayBuffer().catch(() => undefined);
-        throw new GeolyError('grant_missing', 'This authorization does not grant access to the requested resource (HTTP 403)', {
-          status: 403,
-          tool: opts.tool,
-          hint: 'Re-run `geoly auth login` and approve the needed permissions on the consent screen.',
-        });
-      }
-      if (res.status === 429) {
-        const retryAfter = parseRetryAfter(res.headers.get('retry-after')) ?? 2 ** attempts;
-        await res.arrayBuffer().catch(() => undefined);
-        const waitMs = retryAfter * 1000;
-        if (attempts < RATE_LIMIT_MAX_ATTEMPTS && Date.now() + waitMs < budgetEnd) {
-          warn(`geoly: rate limited — retrying in ${retryAfter}s (${attempts}/${RATE_LIMIT_MAX_ATTEMPTS})`);
-          await sleep(waitMs);
-          continue;
-        }
-        throw new GeolyError('rate_limited', 'Rate limited and retry budget exhausted (HTTP 429)', {
-          status: 429,
-          retryAfter,
-          tool: opts.tool,
-        });
-      }
-      if (!res.ok) {
-        await res.arrayBuffer().catch(() => undefined);
-        throw new GeolyError('upstream_unavailable', `GEOly service error (HTTP ${res.status})`, {
-          status: res.status,
-          tool: opts.tool,
-          hint: 'Transient — a short back-off then retry is reasonable.',
-        });
-      }
-
-      const rpc = await parseRpcBody(res, opts.tool);
-      if (rpc.error) {
-        // -32602 = the server's schema validation rejected the arguments before anything ran:
-        // that is the caller's mistake (usage, exit 2), not a tool failure (exit 1). Agents
-        // branch on this to fix the call instead of retrying or blaming the service.
-        const invalidParams = rpc.error.code === -32602;
-        throw new GeolyError(invalidParams ? 'usage_error' : 'tool_error', rpc.error.message || 'Tool call failed', {
-          tool: opts.tool,
-          cause: rpc.error,
-          hint: invalidParams ? `Check the parameters with: geoly schema ${opts.tool ?? '<tool>'}` : undefined,
-        });
-      }
-      return rpc.result as T;
     }
+  }
+
+  /** name → advertised server budget; filled by listTools(). */
+  private budgets?: Map<string, number>;
+
+  /**
+   * The tool's advertised server budget. Filled by listTools(); when this client has not
+   * listed tools yet, the on-disk tools cache is consulted — never the network: a budget
+   * lookup must not cost a round trip.
+   */
+  private toolBudgetMs(name: string): number | undefined {
+    if (!this.budgets) {
+      const cached = readJson<ToolsCacheFile>(cachePath(this.ctx.profile));
+      this.budgets = budgetMap(cached && cached.endpoint === this.url() ? (cached.tools as ToolInfo[]) : []);
+    }
+    return this.budgets.get(name);
   }
 
   /** tools/list with the 60s cache and stale-on-network-failure fallback. */
@@ -251,21 +296,34 @@ export class McpClient {
       cached &&
       cached.endpoint === this.url() &&
       Date.now() - cached.fetchedAt < TOOLS_CACHE_TTL_MS;
-    if (cacheValid && !refresh) return cached!.tools as ToolInfo[];
+    if (cacheValid && !refresh) return this.remember(cached!.tools as ToolInfo[]);
 
     try {
+      // tools/list keeps the short ordinary deadline (ctx.timeoutMs): it is cheap server-side,
+      // and a stale cache is a fine answer when it is slow.
       const result = await this.request<{ tools: ToolInfo[] }>('tools/list', {});
       const tools = result.tools ?? [];
       writeJson(file, { endpoint: this.url(), fetchedAt: Date.now(), tools } satisfies ToolsCacheFile);
-      return tools;
+      return this.remember(tools);
     } catch (err) {
       // Network/upstream trouble: fall back to a stale cache so agents keep working.
-      if (cached && cached.endpoint === this.url() && err instanceof GeolyError && err.kind === 'upstream_unavailable') {
+      if (
+        cached &&
+        cached.endpoint === this.url() &&
+        err instanceof GeolyError &&
+        (err.kind === 'upstream_unavailable' || err.kind === 'timeout')
+      ) {
         warn('geoly: could not refresh the tool list — using a stale cache');
-        return cached.tools as ToolInfo[];
+        return this.remember(cached.tools as ToolInfo[]);
       }
       throw err;
     }
+  }
+
+  /** Keep the listed tools' budgets for callTool(). */
+  private remember(tools: ToolInfo[]): ToolInfo[] {
+    this.budgets = budgetMap(tools);
+    return tools;
   }
 
   /**
@@ -278,6 +336,10 @@ export class McpClient {
    * so a script does not have to know about the in-band shape. Timeouts are not retried
    * here — the server asks for ~60s and the result is cached when it lands, so that is the
    * caller's decision.
+   *
+   * Deadline: the tool's advertised server budget + 15 s (or 60 s when unknown), never less
+   * than that even with a shorter `--timeout` — see deadline.ts `toolDeadlineMs`. That makes
+   * the server's own TOOL_TIMEOUT (hint + retry_after_seconds) arrive before we give up.
    */
   async callTool(
     name: string,
@@ -293,14 +355,16 @@ export class McpClient {
             : 'Re-run with --yes to confirm (scripts), or answer the prompt in a terminal.',
       });
     }
-    const result = await this.request<ToolCallResult>('tools/call', { name, arguments: args }, { tool: name });
+    const serverBudgetMs = this.toolBudgetMs(name);
+    const reqOpts: RequestOptions = { tool: name, serverBudgetMs, timeoutMs: toolDeadlineMs(this.ctx, serverBudgetMs) };
+    const result = await this.request<ToolCallResult>('tools/call', { name, arguments: args }, reqOpts);
     const tail = result.isError ? structuredErrorTail(result) : undefined;
     if (tail && RATE_LIMIT_CODES.has(tail.error) && tail.retryAfter !== undefined) {
       const waitMs = tail.retryAfter * 1000;
       if (waitMs <= RATE_LIMIT_BUDGET_MS) {
         warn(`geoly: ${name} is rate limited by the server — retrying once in ${tail.retryAfter}s`);
         await sleep(waitMs);
-        return this.request<ToolCallResult>('tools/call', { name, arguments: args }, { tool: name });
+        return this.request<ToolCallResult>('tools/call', { name, arguments: args }, reqOpts);
       }
     }
     return result;
@@ -314,6 +378,16 @@ export class McpClient {
       clientInfo: { name: 'geoly-cli', version: VERSION },
     });
   }
+}
+
+/** name → advertised server budget (ms) for the tools that carry one. */
+function budgetMap(tools: ToolInfo[]): Map<string, number> {
+  const map = new Map<string, number>();
+  for (const t of tools) {
+    const ms = advertisedBudgetMs(t);
+    if (ms !== undefined) map.set(t.name, ms);
+  }
+  return map;
 }
 
 /** The JSON-RPC response frame inside one SSE frame, if it holds one. */
@@ -337,7 +411,12 @@ function rpcFrame(frame: string): JsonRpcResponse | undefined {
  * ~19s (mcp_call_log says success) while the stream stayed open behind the proxy and the
  * CLI sat there until its own timeout. The answer was already on the wire; take it.
  */
-async function parseRpcBody(res: Response, tool?: string): Promise<JsonRpcResponse> {
+async function parseRpcBody(
+  res: Response,
+  tool?: string,
+  /** Returns the client-timeout error when the failure was our deadline aborting the read. */
+  asTimeout?: (err: unknown) => GeolyError | undefined,
+): Promise<JsonRpcResponse> {
   const contentType = res.headers.get('content-type') ?? '';
   try {
     if (!contentType.includes('text/event-stream')) {
@@ -367,8 +446,27 @@ async function parseRpcBody(res: Response, tool?: string): Promise<JsonRpcRespon
       }
     }
   } catch (err) {
+    // An aborted read is not a malformed response: before this check a deadline that fired
+    // mid-body was reported as "Could not parse the server response".
+    const timedOut = asTimeout?.(err);
+    if (timedOut) throw timedOut;
     throw new GeolyError('upstream_unavailable', 'Could not parse the server response', { tool, cause: err });
   }
+}
+
+/**
+ * Whether an `isError` tool result is the server's argument validation rejecting the call.
+ *
+ * The MCP SDK (server `McpServer`, 1.x) catches the `McpError(-32602, "Input validation error:
+ * …")` thrown by its schema check inside tools/call and returns it as an ordinary `isError`
+ * result whose text is `MCP error -32602: Input validation error: …` — not as a JSON-RPC error
+ * frame. So the -32602 → usage mapping in request() never saw unknown / out-of-range / bad-enum
+ * arguments, and they exited 1 as `tool_error`. `Output validation error` (also -32602 in the
+ * SDK) is the server's own bug, not the caller's, and stays a tool_error.
+ */
+export function isInputValidationError(text: string): boolean {
+  if (/Output validation error/i.test(text)) return false;
+  return /Input validation error/i.test(text) || /MCP error -32602\b/.test(text);
 }
 
 /**
@@ -385,11 +483,26 @@ export function unwrapToolResult(name: string, result: ToolCallResult): unknown 
       throw new GeolyError('rate_limited', headline, { tool: name, retryAfter: tail.retryAfter, cause: tail.payload });
     }
     if (tail?.error === 'TOOL_TIMEOUT') {
-      throw new GeolyError('upstream_unavailable', headline, {
+      // The server's own timeout answer — shown verbatim (its prose is the actionable part), with
+      // its retry_after_seconds as retryAfter. The client deadline is derived from the tool's
+      // advertised budget + grace precisely so that this answer arrives before we give up.
+      const prose = text.trim().split('\n').slice(0, -1).join('\n').trim() || headline;
+      throw new GeolyError('upstream_unavailable', prose, {
         tool: name,
         retryAfter: tail.retryAfter,
         cause: tail.payload,
-        hint: 'Narrow the window / scope, or retry the same call once after ~60s (heavy queries keep running and are cached).',
+        hint:
+          tail.retryAfter !== undefined
+            ? `Server-side timeout: retry the same call once after ${tail.retryAfter}s, or narrow the window / scope.`
+            : 'Server-side timeout: narrow the window / scope, or retry the same call once later.',
+      });
+    }
+    if (isInputValidationError(text)) {
+      // Same meaning as a JSON-RPC -32602 error frame (see request()): the arguments were
+      // rejected before the tool ran — the caller's mistake, exit 2.
+      throw new GeolyError('usage_error', text.trim() || headline, {
+        tool: name,
+        hint: `Check the parameters with: geoly schema ${name}`,
       });
     }
     throw new GeolyError('tool_error', text || headline, { tool: name, cause: tail?.payload });

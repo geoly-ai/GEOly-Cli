@@ -9,7 +9,8 @@
  * Credentials and error mapping are shared with McpClient so `geoly ask` fails
  * the same way `geoly call` does.
  */
-import { Ctx, autoAuthAllowed } from './context.js';
+import { API_KEY_REJECTED_HINT, Ctx, MAX_TIMEOUT_S, autoAuthAllowed } from './context.js';
+import { clientTimeoutError, isAbortError } from './deadline.js';
 import { GeolyError } from './errors.js';
 import { ensureAccessToken } from './oauth.js';
 import { VERSION } from './version.js';
@@ -236,11 +237,17 @@ export async function authedFetch(ctx: Ctx, url: string, init: RequestInit, dead
       return await fetch(url, { ...init, headers: { ...headers(token), ...extra } });
     } catch (err) {
       if (timedOut && deadline) {
-        throw new GeolyError('upstream_unavailable', `No response from the GEOly service within ${deadline.ms / 1000}s`, {
+        throw clientTimeoutError({
+          deadlineMs: deadline.ms,
+          what: 'the GEOly service',
           cause: err,
           retryable: true,
-          hint: 'Raise --timeout (max 120) or check `geoly runs list` — if the server did start a run, it is there.',
+          hint: `Raise --timeout (max ${MAX_TIMEOUT_S}) or check \`geoly runs list\` — if the server did start a run, it is there.`,
         });
+      }
+      // A caller-supplied AbortSignal.timeout(ctx.timeoutMs) that fired before the headers.
+      if (abortedByTimeout(init.signal)) {
+        throw clientTimeoutError({ deadlineMs: ctx.timeoutMs, what: 'the GEOly service', cause: err });
       }
       throw networkError(err);
     } finally {
@@ -256,7 +263,7 @@ export async function authedFetch(ctx: Ctx, url: string, init: RequestInit, dead
       throw new GeolyError('auth_expired', 'Authentication failed (HTTP 401)', {
         status: 401,
         hint: ctx.staticToken
-          ? 'GEOLY_TOKEN was rejected — legacy tokens can no longer be created; unset it and run `geoly auth login` instead.'
+          ? API_KEY_REJECTED_HINT
           : 'Run `geoly auth login` (use --remote on headless machines).',
         next: ctx.staticToken ? undefined : 'geoly auth login',
       });
@@ -265,6 +272,30 @@ export async function authedFetch(ctx: Ctx, url: string, init: RequestInit, dead
     res = await attempt();
   }
   return res;
+}
+
+/** True when `signal` was aborted by a timeout (AbortSignal.timeout / our deadlines), not by Ctrl-C. */
+function abortedByTimeout(signal: AbortSignal | null | undefined): boolean {
+  if (!signal?.aborted) return false;
+  const reason = signal.reason as { name?: unknown } | undefined;
+  return reason?.name === 'TimeoutError';
+}
+
+/**
+ * Read a JSON body under the request's deadline. The deadline (`AbortSignal.timeout`) covers the
+ * body too, and when it fires mid-read `res.json()` rejects with a bare TimeoutError — which used
+ * to surface as kind `tool_error` ("The operation was aborted due to timeout", exit 1). That is a
+ * client timeout; a body that arrived and is not JSON is an upstream problem.
+ */
+export async function readJsonBody<T>(res: Response, ctx: Ctx, what: string, signal?: AbortSignal): Promise<T> {
+  try {
+    return (await res.json()) as T;
+  } catch (err) {
+    if (abortedByTimeout(signal) || (isAbortError(err) && (err as { name?: string }).name === 'TimeoutError')) {
+      throw clientTimeoutError({ deadlineMs: ctx.timeoutMs, what, cause: err });
+    }
+    throw new GeolyError('upstream_unavailable', `Could not parse the response from ${what}`, { cause: err });
+  }
 }
 
 /**
@@ -287,13 +318,14 @@ export async function fetchProfile(
   ctx: Ctx,
   opts: { brandId?: string; locale?: 'zh' | 'en' } = {},
 ): Promise<AgentProfile> {
+  const signal = AbortSignal.timeout(ctx.timeoutMs);
   const res = await authedFetch(
     ctx,
     apiUrl(ctx, '/api/agent/profile', { brand_id: opts.brandId, locale: opts.locale }),
-    { method: 'GET', signal: AbortSignal.timeout(ctx.timeoutMs) },
+    { method: 'GET', signal },
   );
   if (!res.ok) await throwForStatus(res);
-  return (await res.json()) as AgentProfile;
+  return readJsonBody<AgentProfile>(res, ctx, 'GET /api/agent/profile', signal);
 }
 
 /**

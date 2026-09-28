@@ -14,7 +14,9 @@ export abstract class GeolyCommand extends Command {
   output = Option.String('--output', 'json', { description: 'json | raw' });
   errorFormat = Option.String('--error-format', 'human', { description: 'human | json' });
   quiet = Option.Boolean('-q,--quiet', false, { description: 'Suppress status messages on stderr' });
-  timeout = Option.String('--timeout', { description: 'Request timeout in seconds (max 120)' });
+  timeout = Option.String('--timeout', {
+    description: 'Request timeout in seconds (max 300). Tool calls default to the server budget + 15s (60s if unknown); other requests 30s.',
+  });
   noAutoAuth = Option.Boolean('--no-auto-auth', false, { description: 'Fail fast instead of opening a browser' });
 
   /** Subclasses implement run(); execute() adds ctx + contract error handling. */

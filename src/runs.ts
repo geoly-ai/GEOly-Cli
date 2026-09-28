@@ -10,7 +10,7 @@
  *     existing run (JSON, not SSE) instead of starting and charging a second one.
  */
 import * as crypto from 'node:crypto';
-import { apiUrl, authedFetch, throwForStatus } from './agent.js';
+import { apiUrl, authedFetch, readJsonBody, throwForStatus } from './agent.js';
 import { Ctx } from './context.js';
 import { GeolyError } from './errors.js';
 
@@ -163,17 +163,15 @@ export async function startRun(
 
 /** `GET /api/agent/runs/:id` — the run log row (answer included once finished). */
 export async function getRun(ctx: Ctx, runId: string): Promise<Record<string, unknown>> {
-  const res = await authedFetch(ctx, apiUrl(ctx, `/api/agent/runs/${encodeURIComponent(runId)}`), {
-    method: 'GET',
-    signal: AbortSignal.timeout(ctx.timeoutMs),
-  });
+  const signal = AbortSignal.timeout(ctx.timeoutMs);
+  const res = await authedFetch(ctx, apiUrl(ctx, `/api/agent/runs/${encodeURIComponent(runId)}`), { method: 'GET', signal });
   if (res.status === 404) {
     throw new GeolyError('usage_error', `No run "${runId}" visible to this token`, {
       hint: 'Run ids look like run_…; `geoly runs list` shows recent ones.',
     });
   }
   if (!res.ok) await throwForStatus(res);
-  return (await res.json()) as Record<string, unknown>;
+  return readJsonBody<Record<string, unknown>>(res, ctx, `GET /api/agent/runs/${runId}`, signal);
 }
 
 /**
@@ -221,13 +219,14 @@ function sleepUnlessAborted(ms: number, signal?: AbortSignal): Promise<void> {
 
 /** `GET /api/agent/runs` — recent runs for the org (receipt fields only). */
 export async function listRuns(ctx: Ctx, opts: { brandId?: string; limit?: number }): Promise<unknown> {
+  const signal = AbortSignal.timeout(ctx.timeoutMs);
   const res = await authedFetch(
     ctx,
     apiUrl(ctx, '/api/agent/runs', { brand_id: opts.brandId, limit: opts.limit ? String(opts.limit) : undefined }),
-    { method: 'GET', signal: AbortSignal.timeout(ctx.timeoutMs) },
+    { method: 'GET', signal },
   );
   if (!res.ok) await throwForStatus(res);
-  return res.json();
+  return readJsonBody<unknown>(res, ctx, 'GET /api/agent/runs', signal);
 }
 
 /**

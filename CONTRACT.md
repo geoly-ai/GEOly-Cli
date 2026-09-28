@@ -75,10 +75,10 @@ output shape (output is `--output json|raw`, everywhere).
   re-running; `--no-save` skips it, `-o <file>` chooses the path (stdout then prints only
   `{status, run_id, saved_to}`). A directory that cannot be written is reported on stderr, not
   silently skipped. Add `.geoly/` to `.gitignore`.
-- **`--timeout` vs `--wait`.** `--timeout` (default 30 s, max 120 — above that is a usage
+- **`--timeout` vs `--wait`.** `--timeout` (default 30 s, max 300 — above that is a usage
   error) bounds each *request*: for `run` that is the wait for response headers (the stream
   opening, a replay, or an error), never the stream itself. `--wait` is how long to follow the
-  run. A server that never answers fails with exit 6 inside `--timeout`.
+  run. A server that never answers fails with `kind: timeout` (exit 6) inside `--timeout`.
 - **`--context @file`** reads the file as text: UTF-8 (BOM stripped) or UTF-16 with a BOM
   (what Windows PowerShell 5.1 `Out-File` writes). Bytes that are neither are a usage error —
   the CLI never guesses a code page and never sends mojibake to the agent.
@@ -92,6 +92,23 @@ output shape (output is `--output json|raw`, everywhere).
 - **Failures.** A server-side `error` event → `kind: tool_error`, exit 1, `next: geoly run <id>`.
   HTTP errors map as for every other command (402 `subscription_required` / `quota_exhausted`,
   429 `rate_limited`, 5xx `upstream_unavailable`).
+
+- **Deadlines (behaviour change).** A `tools/call` no longer uses a fixed 30 s. The server
+  advertises each tool's own time budget in `tools/list` as `_meta["geoly/timeoutMs"]` (heavy
+  tools run up to ~45–50 s before the server answers with its own `TOOL_TIMEOUT`). The CLI's
+  deadline for a call is **that budget + 15 s**, or **60 s** when the tool advertises none
+  (older server). `--timeout <s>` is an explicit override that can *lengthen* the wait (up to
+  300 s) but never cut it below budget + 15 s — a shorter deadline would only hide the server's
+  own, actionable timeout answer. Everything else that talks to the endpoint (the tool list,
+  `whoami`, Agent API lookups, `geoly run`'s headers wait) keeps the short default: 30 s, or
+  `--timeout`. The deadline covers connect, headers **and** the response body.
+- **Client timeout vs server timeout.** When the CLI's deadline runs out — before the headers
+  or halfway through the body — the error is `kind: timeout` (exit 6) with
+  `deadlineSeconds` (and `serverBudgetSeconds` when the tool advertises one) in
+  `--error-format json`; the server may still be working, retry once or raise `--timeout`.
+  When the *server* gives up first it answers with `TOOL_TIMEOUT`, shown verbatim as
+  `upstream_unavailable` (exit 6) with `retryAfter` (≈ 60 s). Only a body that arrived and is
+  not valid JSON / SSE is `upstream_unavailable: Could not parse the server response`.
 
 - `geoly call` is the single execution entry point. Parameter flags use the MCP schema
   parameter names verbatim (including underscores, e.g. `--brand_id`). Booleans are
@@ -187,7 +204,10 @@ Three ways in, picked in this order:
    fails with exit 3 and `next: geoly auth login --code <code>` — it cannot block on a paste
    that may come from another window. A pending sign-in is reused by later commands rather
    than restarted, and only one is started per process.
-3. **`GEOLY_TOKEN`** (static `geom_` token): read-only, never opens a browser. Servers and CI.
+3. **`GEOLY_TOKEN`** (an API key, `geom_…`, created in Settings → Developers → API keys): never
+   opens a browser. Servers and CI. Its permissions are whatever the key was granted — read,
+   plus any write tools chosen when the key was created; `geoly whoami` reports `auth: api-key`
+   and the granted `writeTools`.
 
 - Auto-degrade: when `CI=true`, `GEOLY_NO_AUTO_AUTH=1`, or `--no-auto-auth` is set, missing
   credentials fail fast with exit code 3 instead of blocking.
@@ -205,15 +225,18 @@ Three ways in, picked in this order:
   error and honour `--error-format json`; nothing but data is ever written to stdout.
   Default is human-readable (What / Why / Hint).
   `--error-format json` switches errors to a stable object:
-  `{ "kind", "status", "tool", "retryAfter", "hint", "next" }` (`next` = the exact command
-  that moves things forward, when one exists)
+  `{ "kind", "status", "tool", "retryAfter", "hint", "next", "deadlineSeconds",
+  "serverBudgetSeconds" }` (`next` = the exact command that moves things forward, when one
+  exists; the two deadline fields only on `kind: timeout`)
   with `kind` ∈ `auth_expired | grant_missing | rate_limited | subscription_required |
-  quota_exhausted | upstream_unavailable | tool_error | usage_error | write_blocked`.
+  quota_exhausted | upstream_unavailable | timeout | tool_error | usage_error | write_blocked`.
   `subscription_required` and `quota_exhausted` both arrive as HTTP 402 but need opposite
   responses: the first means there is no active subscription, the second means the plan is
   active and this period's AI Credits are spent (the hint carries the reset date).
-- Truncation/pagination signals from the server (`_truncated`, `hasMore`, `totalPages`) are
-  preserved in the payload; the CLI adds a stderr hint when they appear.
+- Truncation/pagination signals from the server (`_truncated: true`, `hasMore`, `totalPages`) are
+  preserved in the payload; the CLI adds a stderr hint when they appear. A `_truncated` value
+  that is not literally `true` (some tools return a counts object there on a complete answer)
+  is not a truncation signal.
 
 ## Organization resolution
 
@@ -229,11 +252,11 @@ prompt — they fail with the named list and the flag to add.
 |---|---|---|
 | 0 | Success | — |
 | 1 | Tool / general error | Read the error object; usually don't retry |
-| 2 | Usage error (bad flag / unknown tool / undeclared tool parameter / bad command line — missing positional, unknown subcommand — / server rejected the parameters, JSON-RPC -32602) | Fix the command; check `geoly schema` / `--help` |
+| 2 | Usage error (bad flag / unknown tool / undeclared tool parameter / bad command line — missing positional, unknown subcommand — / server rejected the parameters, JSON-RPC -32602 — as an error frame or as the in-band `MCP error -32602: Input validation error…` result) | Fix the command; check `geoly schema` / `--help` |
 | 3 | Auth (only in CI / `--no-auto-auth` / user cancelled) | Set `GEOLY_TOKEN` or complete browser auth once |
 | 4 | Rate limited — HTTP 429 (after honoring `Retry-After`, max 3 attempts / 60s budget) or the server's in-band `GUARDED_RATE_LIMITED` / `CIRCUIT_OPEN` result (retried once within the same budget when `retry_after_seconds` allows) | Back off `retryAfter`, retryable |
 | 5 | No active subscription (HTTP 402) | Human action required; don't retry |
-| 6 | Upstream service error (5xx / timeout / in-band `TOOL_TIMEOUT`, which carries `retryAfter` ≈ 60s — the query keeps running and is cached) | Short back-off, retry the same call once |
+| 6 | Upstream service error (5xx / network / in-band `TOOL_TIMEOUT`, which carries `retryAfter` ≈ 60s — the query keeps running and is cached) **or** `kind: timeout` — no answer within the client deadline (see *Deadlines*; carries `deadlineSeconds`) | Short back-off, retry the same call once (or raise `--timeout`) |
 | 7 | AI Credits for this period are used up (HTTP 402) | Don't retry; wait for the reset date in the hint, or raise the limit |
 
 Agent turns retry themselves before giving up: a failure that happens **before the first

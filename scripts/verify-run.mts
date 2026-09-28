@@ -22,7 +22,7 @@
  *     exit immediately; a lingering 35s idle timer used to hold it);
  * 14. a replayed `failed` record exits 1 like a live failure; raw-mode replay prints the answer
  *     (and only the answer — the run id goes to stderr, 0.3.1);
- * 15. a server that never sends headers → upstream_unavailable inside `--timeout` (0.3.1: the
+ * 15. a server that never sends headers → kind timeout (exit 6) inside `--timeout` (0.3.1: the
  *     deadline used to be missing on the streaming request entirely);
  * 16. `geoly call` rejects parameters the schema does not declare — typo, and brand/org
  *     scoping on a single-brand token — as usage_error, before anything is sent;
@@ -331,7 +331,7 @@ async function main(): Promise<void> {
     hangKind = err instanceof GeolyError ? `${err.kind}:${err.exitCode}` : String(err);
   }
   const hangMs = Date.now() - tHang;
-  check('15 hung server → upstream_unavailable exit 6 within --timeout', hangKind === 'upstream_unavailable:6' && hangMs < 2_000, `${hangKind} after ${hangMs}ms`);
+  check('15 hung server → timeout (exit 6) within --timeout', hangKind === 'timeout:6' && hangMs < 2_000, `${hangKind} after ${hangMs}ms`);
 
   // 16. undeclared call parameters are usage errors
   const schemaTool = { name: 'get_brand_overview', inputSchema: { type: 'object', properties: { time_range: { type: 'string' }, platform: { type: 'string' } } } };
