@@ -246,9 +246,16 @@ feeds `geoly <command> --help`; README mirrors it verbatim.
 
 ## Update & mirrors
 
-- A daily, best-effort check (TTY only, 1.5 s budget) notices a newer binary **and** a newer
-  published skill than the one installed in agent hosts; it only prints a line, never rewrites
-  anything. `geoly upgrade` replaces the binary and refreshes the skill in hosts that have it.
+- **Auto-update.** At most once a day, any command of a released binary starts a detached
+  `geoly upgrade --auto` in the background — also under scripts and agent hosts, which never see
+  a terminal. The running command is not delayed and keeps its own image; the swap is sha256-
+  verified, lock-guarded (one download per machine), and silent. The next interactive run prints
+  one line (`updated vX → vY in the background`). Off with `GEOLY_NO_AUTO_UPDATE=1`; always off
+  when `CI` is set and in development checkouts, which fall back to the old TTY-only notice.
+- A daily TTY nudge (1.5 s budget) still reports a newer published skill than the one installed in
+  agent hosts. `geoly upgrade` replaces the binary now and refreshes the skill in hosts that have it.
+- An out-of-date binary may find `_geoly_cli_upgrade` at the top of one result a day (the server's
+  only way to reach old scripts). `geoly call` moves it to stderr; stdout stays the tool's data.
 - `GEOLY_INSTALL_BASE` (same variable the install scripts honour) points both the update check
   and `geoly upgrade` at a mirror (https on `*.geoly.ai` or github.com); anything else is
   ignored with a warning. With a mirror set, github.com is never contacted.
