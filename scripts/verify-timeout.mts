@@ -16,7 +16,9 @@
  *  8. a fresh client that did not list tools reads the budget from the on-disk tools cache;
  *  9. `geoly runs wait`'s GET aborted mid-body → kind `timeout`, not a raw `tool_error`;
  * 10. the "truncated by the server" warning fires only on the real marker (`_truncated: true`),
- *     not on a `_truncated` counts object some tools return with a complete answer.
+ *     not on a `_truncated` counts object some tools return with a complete answer;
+ * 11. the SDK's in-band argument validation failure (`isError` + "MCP error -32602: Input
+ *     validation error…") is usage_error / exit 2; an output validation error stays tool_error.
  */
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -209,6 +211,24 @@ async function main(): Promise<void> {
   check('10a real server truncation warns, with counts', /truncated by the server \(20 of 350 shown\)/.test(truncationWarning({ _truncated: true, _totalCount: 350, _shownCount: 20, _message: 'm', items: [] }) ?? ''));
   check('10b _truncated counts object (complete answer) → no warning', truncationWarning({ record: {}, _truncated: { citations: 120, searchSources: 40 } }) === undefined);
   check('10c hasMore still hinted', /more rows available/.test(truncationWarning({ hasMore: true }) ?? ''));
+
+  // 11. in-band -32602
+  const inBand = (text: string): GeolyError | undefined => {
+    try {
+      unwrapToolResult('get_brand_overview', { isError: true, content: [{ type: 'text', text }] });
+      return undefined;
+    } catch (err) {
+      return err instanceof GeolyError ? err : undefined;
+    }
+  };
+  const unknownArg = inBand('MCP error -32602: Input validation error: Invalid arguments for tool get_brand_overview: Unknown argument(s): time-range');
+  check('11a unknown argument → usage_error exit 2', unknownArg?.kind === 'usage_error' && unknownArg.exitCode === 2 && /geoly schema get_brand_overview/.test(unknownArg.hint ?? ''), `${unknownArg?.kind}`);
+  const range = inBand('MCP error -32602: Input validation error: Invalid arguments for tool get_brand_overview: [{"code":"too_big","maximum":50,"path":["limit"]}]');
+  check('11b range violation → usage_error exit 2', range?.kind === 'usage_error' && range.exitCode === 2);
+  const output = inBand('MCP error -32602: Output validation error: Tool get_brand_overview has an output schema but no structured content was provided');
+  check('11c output validation error stays tool_error (server bug)', output?.kind === 'tool_error' && output.exitCode === 1, `${output?.kind}`);
+  const plain = inBand('Brand not found');
+  check('11d ordinary tool failure stays tool_error', plain?.kind === 'tool_error');
 
   for (const s of openSockets) s.destroy();
   server.close();

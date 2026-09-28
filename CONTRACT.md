@@ -249,7 +249,7 @@ prompt — they fail with the named list and the flag to add.
 |---|---|---|
 | 0 | Success | — |
 | 1 | Tool / general error | Read the error object; usually don't retry |
-| 2 | Usage error (bad flag / unknown tool / undeclared tool parameter / bad command line — missing positional, unknown subcommand — / server rejected the parameters, JSON-RPC -32602) | Fix the command; check `geoly schema` / `--help` |
+| 2 | Usage error (bad flag / unknown tool / undeclared tool parameter / bad command line — missing positional, unknown subcommand — / server rejected the parameters, JSON-RPC -32602 — as an error frame or as the in-band `MCP error -32602: Input validation error…` result) | Fix the command; check `geoly schema` / `--help` |
 | 3 | Auth (only in CI / `--no-auto-auth` / user cancelled) | Set `GEOLY_TOKEN` or complete browser auth once |
 | 4 | Rate limited — HTTP 429 (after honoring `Retry-After`, max 3 attempts / 60s budget) or the server's in-band `GUARDED_RATE_LIMITED` / `CIRCUIT_OPEN` result (retried once within the same budget when `retry_after_seconds` allows) | Back off `retryAfter`, retryable |
 | 5 | No active subscription (HTTP 402) | Human action required; don't retry |

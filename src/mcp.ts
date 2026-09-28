@@ -451,6 +451,21 @@ async function parseRpcBody(
 }
 
 /**
+ * Whether an `isError` tool result is the server's argument validation rejecting the call.
+ *
+ * The MCP SDK (server `McpServer`, 1.x) catches the `McpError(-32602, "Input validation error:
+ * …")` thrown by its schema check inside tools/call and returns it as an ordinary `isError`
+ * result whose text is `MCP error -32602: Input validation error: …` — not as a JSON-RPC error
+ * frame. So the -32602 → usage mapping in request() never saw unknown / out-of-range / bad-enum
+ * arguments, and they exited 1 as `tool_error`. `Output validation error` (also -32602 in the
+ * SDK) is the server's own bug, not the caller's, and stays a tool_error.
+ */
+export function isInputValidationError(text: string): boolean {
+  if (/Output validation error/i.test(text)) return false;
+  return /Input validation error/i.test(text) || /MCP error -32602\b/.test(text);
+}
+
+/**
  * Unwrap a tool result for printing: prefer structuredContent, else parse the
  * single text block as JSON, else return the raw text. isError becomes a
  * tool_error with the server's message.
@@ -476,6 +491,14 @@ export function unwrapToolResult(name: string, result: ToolCallResult): unknown 
           tail.retryAfter !== undefined
             ? `Server-side timeout: retry the same call once after ${tail.retryAfter}s, or narrow the window / scope.`
             : 'Server-side timeout: narrow the window / scope, or retry the same call once later.',
+      });
+    }
+    if (isInputValidationError(text)) {
+      // Same meaning as a JSON-RPC -32602 error frame (see request()): the arguments were
+      // rejected before the tool ran — the caller's mistake, exit 2.
+      throw new GeolyError('usage_error', text.trim() || headline, {
+        tool: name,
+        hint: `Check the parameters with: geoly schema ${name}`,
       });
     }
     throw new GeolyError('tool_error', text || headline, { tool: name, cause: tail?.payload });
