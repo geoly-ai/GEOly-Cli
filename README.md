@@ -94,7 +94,7 @@ nothing failed, so the exit code is 0, but the CLI says on stderr that the answe
   3  auth — no valid credentials (run `geoly auth login`)
   4  rate limited — honor `retryAfter` before retrying
   5  subscription required — the organization has no active plan
-  6  upstream unavailable — network / gateway trouble; a short back-off then retry is reasonable
+  6  upstream unavailable or timed out (kind `timeout`) — network / gateway trouble, or no answer within the deadline; a short back-off then one retry is reasonable
   7  credits exhausted — this period's credits are used up
   ```
 - **Help is plain text when piped** (`geoly --help | cat`), so agents can read it.

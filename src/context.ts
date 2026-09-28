@@ -14,12 +14,23 @@ export interface Ctx {
   output: 'json' | 'raw';
   errorFormat: 'human' | 'json';
   quiet: boolean;
+  /**
+   * Deadline for ordinary requests (tools/list, initialize, the Agent API's lookups and the
+   * `geoly run` headers wait): `--timeout`, else 30 s. A `tools/call` does NOT use this — its
+   * deadline comes from the tool's advertised server budget (see deadline.ts `toolDeadlineMs`).
+   */
   timeoutMs: number;
+  /** `--timeout` exactly as given (ms), when the user passed one; undefined means "use the defaults". */
+  timeoutOverrideMs?: number;
   noAutoAuth: boolean;
   noBrowser: boolean;
   /** Force the paste-code sign-in (no loopback listener); auto-detected for SSH / CI / no display. */
   remote: boolean;
-  /** Legacy geom_ static token from GEOLY_TOKEN — read-only, never opens a browser. */
+  /**
+   * API key (`geom_…`) from GEOLY_TOKEN — never opens a browser. Its permissions (read, and
+   * whichever write tools the key was granted in Settings → Developers → API keys) are decided
+   * server-side; the tool list the server returns is the source of truth.
+   */
   staticToken?: string;
 }
 
@@ -35,8 +46,10 @@ export interface CtxInput {
   remote?: boolean;
 }
 
+/** Ordinary requests (tool list, lookups, `geoly run` headers). Tool calls: see deadline.ts. */
 const DEFAULT_TIMEOUT_S = 30;
-const MAX_TIMEOUT_S = 120;
+/** Upper bound for an explicit `--timeout`; also caps a server-derived tool deadline. */
+export const MAX_TIMEOUT_S = 300;
 
 /** Validate an endpoint override against the allowlist. */
 function resolveEndpoint(): string {
@@ -72,17 +85,19 @@ export function makeCtx(input: CtxInput): Ctx {
     throw new GeolyError('usage_error', `--error-format must be human or json, got: ${errorFormat}`);
   }
   let timeoutS = DEFAULT_TIMEOUT_S;
+  let timeoutOverrideMs: number | undefined;
   if (input.timeout !== undefined) {
     timeoutS = Number(input.timeout);
     if (!Number.isFinite(timeoutS) || timeoutS <= 0) {
       throw new GeolyError('usage_error', `--timeout must be a positive number of seconds`);
     }
-    // `--help` says "max 120"; silently clamping 999 → 120 taught agents the flag was elastic.
+    // `--help` states the max; silently clamping 999 → max taught agents the flag was elastic.
     if (timeoutS > MAX_TIMEOUT_S) {
       throw new GeolyError('usage_error', `--timeout must be at most ${MAX_TIMEOUT_S} seconds, got ${timeoutS}`, {
         hint: 'For `geoly run`, --timeout bounds each request (connect + first byte); how long to follow a run is --wait.',
       });
     }
+    timeoutOverrideMs = timeoutS * 1000;
   }
   const staticToken = process.env.GEOLY_TOKEN?.trim() || undefined;
   const profile = sanitizeProfile(input.profile ?? 'default');
@@ -96,6 +111,7 @@ export function makeCtx(input: CtxInput): Ctx {
     errorFormat,
     quiet: input.quiet ?? false,
     timeoutMs: timeoutS * 1000,
+    timeoutOverrideMs,
     noAutoAuth: input.noAutoAuth ?? false,
     noBrowser: input.noBrowser ?? false,
     remote: input.remote ?? false,
