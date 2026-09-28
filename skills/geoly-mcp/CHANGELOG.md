@@ -2,6 +2,48 @@
 
 All notable changes to the `geoly-mcp` agent skill.
 
+## 0.6.1
+
+Fixes and one behaviour change shipped after 0.6.0.
+
+- **`get_topic_analytics`: `include_ungrouped` now means what it says (behaviour change).**
+  Without `topic_ids` (omitted or `[]`) it has no effect: `include_ungrouped=true` returns the
+  whole brand, exactly like leaving it out — and the whole brand already carries topic-less
+  prompts under `byTopic._ungrouped`. It used to narrow the scope to **only** topic-less prompts
+  (every named topic vanished from `byTopic` and `global.*`, with nothing in the response saying
+  so); in the last 30 days 53 of 211 calls hit that shape and silently got a fraction of the
+  brand. With `topic_ids` nothing changes: `true` adds the topic-less prompts to that subset,
+  `false` / omitted keeps just those topics. There is no "only topic-less prompts" switch — read
+  `byTopic._ungrouped` from the whole-brand call.
+- **Acceptance fixes (2026-09-23).** Five defects found after the sweep went live:
+  - `get_risk_context_sources` `time_range=30d` no longer fails every time: the sources read is
+    split by business day into a few smaller queries run **one after another** (exact — one
+    answer's votes share one day), so no single query hits the database time limit and the result
+    is cached once computed. On a large brand the first cold call can still run past the tool's
+    time limit; the computation keeps going and a retry ~60s later is served from cache. When the
+    read still fails, the error now
+    says **why** — a database time limit (cancelled, nothing cached; shrink the window / platform /
+    topics), a busy database (retry shortly) or a transient failure — and never "the brand may not
+    have perception data" (no-data comes back as empty rows, not as an error). Same wording on
+    `get_competitor_polarity`.
+  - `list_public_shopping_products` with `topic_ids` returned `data: null` although the topic has
+    products: the topic filter was right, but no product reached the shelf's ≥3-appearances-per-batch
+    threshold in that single batch. It now returns the batch aggregates with `cards: []`,
+    `shelfDepth: 0` and a `shelfNote`; `data` is `null` only when the batch has no products.
+  - `get_public_brand` / `compare_public_brands` with an explicit `date_from`/`date_to` crossing a
+    collection-scale breakpoint now report `crossesBreakpoint: true` + `breakpointDate` and truncate
+    the visibility trend (no `netChangePp` across the break), exactly like `range=90d`.
+  - `get_audit_detail` `include_citation_insights`: a `timeout` / `error` / `budget` result is no
+    longer cached (it used to be replayed for a minute, so the retry "timed out" in 1s without
+    running); the banner query now resolves the audited domain's hosts from the host dictionary and
+    reads them by index, so a domain with no citations answers instantly.
+  - Timeouts tell the truth: a database statement timeout is reported as such with a per-tool hint
+    (no more raw `canceling statement due to statement timeout` or "This view is taking too long to
+    load"), and the MCP `TOOL_TIMEOUT` error only offers "retry once, it is cached when done" (and
+    `retry_after_seconds`) for tools where that is true; `get_domain_detail`, `get_page_detail`,
+    the shelf tools and `search_public_entities` now say an identical retry will not help and which
+    arguments actually shrink the query. `TOOL_TIMEOUT` payloads gain `retryable`.
+
 ## 0.6.0
 
 **Tool surface = page caliber.** A 23-PR sweep that aligns every MCP / Agent API / Sidekick
@@ -403,8 +445,8 @@ argument name the error points at.
   Topics tab"; `global.*` has no page consumer; both trends are **weekly** (Asia/Shanghai)
   buckets, not daily; `time_range="all"` is floored to a trailing 30 days. Two scoping traps are
   now spelled out: topic-less prompts come back under `_ungrouped` **by default** (omitting
-  `topic_ids` already includes them), and `include_ungrouped=true` **without** `topic_ids` does
-  the opposite of what it sounds like — it narrows the scope to only topic-less prompts. Also
+  `topic_ids` already includes them), and `include_ungrouped` only matters **with** `topic_ids`
+  (this changed in 0.6.1 — see there). Also
   corrected: `topCompetitors` are the other brands named in the same answers (with the
   brand-entity read on they are resolved entities and include your manually tracked
   competitors), and the competitor arm only reads the T3E derived layer when `platform="all"`
