@@ -6,6 +6,18 @@ import { loadCredentials } from '../oauth.js';
 import { printResult } from '../output.js';
 import { GeolyCommand } from './base.js';
 
+/**
+ * The server registers the Grow-gated public / industry tools as one group (all or none — Grow+
+ * plan AND the public read grant), so one member tells whether the group is on. It must be a
+ * name only that group has: the old `get_public_` prefix test was true on every plan, because
+ * the free source trio (`get_public_sources_overview`, `get_public_source_domain_detail`,
+ * `get_public_source_brand_conduit`) is not Grow-gated (it only needs the source read grant, on
+ * by default); and `compare_public_brands` is gone since the 2026-09-29 consolidation.
+ * `search_public_entities` is the group's entry point ("call first") on both the old and the
+ * consolidated surface.
+ */
+const PUBLIC_GROUP_MARKER = 'search_public_entities';
+
 export class WhoamiCommand extends GeolyCommand {
   static paths = [['whoami']];
   static usage = Command.Usage({
@@ -32,7 +44,7 @@ export class WhoamiCommand extends GeolyCommand {
       server: init.serverInfo ?? null,
       mode,
       toolCount: tools.length,
-      publicToolsEnabled: [...names].some((n) => n.startsWith('get_public_') || n === 'compare_public_brands'),
+      publicToolsEnabled: names.has(PUBLIC_GROUP_MARKER),
       // Write tools appear only when the grant covers them: an OAuth consent (single-org grant +
       // Write ticked) or an API key created with those write permissions.
       writeTools: [...names].filter((n) => WRITE_TOOLS.has(n)).sort(),

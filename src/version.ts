@@ -38,3 +38,18 @@ export function resolveManifestUrl(): string {
   }
   return `${raw.replace(/\/$/, '')}/latest/download/manifest.json`;
 }
+
+/**
+ * Compare dotted versions numerically segment by segment (`0.10.0` is newer than `0.9.9`).
+ * Lives here, in a leaf module, because both the update check and the skill installer need it
+ * and skills.ts must not import updatecheck.ts (which imports skills.ts).
+ */
+export function isNewer(candidate: string, current: string): boolean {
+  const a = candidate.split('.').map((p) => parseInt(p, 10) || 0);
+  const b = current.split('.').map((p) => parseInt(p, 10) || 0);
+  for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
+    const diff = (a[i] ?? 0) - (b[i] ?? 0);
+    if (diff !== 0) return diff > 0;
+  }
+  return false;
+}

@@ -53,7 +53,8 @@ export class InitCommand extends GeolyCommand {
     for (const host of hosts) {
       const r = installSkill(host, bundle);
       installed.push(r);
-      status(ctx, `· ${host.label}: ${r.dir}${r.previous ? ` (was ${r.previous})` : ''}`);
+      // A kept host (newer than the embedded copy) was already explained on stderr by installSkill.
+      if (!r.kept) status(ctx, `· ${host.label}: ${r.dir}${r.previous ? ` (was ${r.previous})` : ''}`);
     }
     if (hosts.length) status(ctx, '· tip: add `.geoly/` to .gitignore — `geoly run` writes receipts there');
 
@@ -84,7 +85,13 @@ export class InitCommand extends GeolyCommand {
       signedIn,
       skillVersion: bundle.version,
       skillSource: bundle.source,
-      installed: installed.map((r) => ({ host: r.host.id, dir: r.dir, files: r.files, previous: r.previous ?? null })),
+      installed: installed.map((r) => ({
+        host: r.host.id,
+        dir: r.dir,
+        files: r.files,
+        previous: r.previous ?? null,
+        ...(r.kept ? { kept: true } : {}),
+      })),
       next,
     });
     return 0;
