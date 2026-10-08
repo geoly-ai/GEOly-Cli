@@ -70,11 +70,12 @@ export class CallCommand extends Command {
             hint: writeGrantHint(this.tool, ctx),
           });
         }
-        // A removed name (2026-09-29 consolidation) is answered with its replacement call.
+        // A pre-0.7.0 name (unlisted by the 2026-09-29 consolidation; still accepted by the
+        // server on MCP v1) is answered with its replacement call — the CLI calls listed tools only.
         throw unknownToolError(this.tool, tools.map((t) => t.name));
       }
-      // Retired names a server keeps as forwarding aliases still answer, but the parent is the one
-      // to script against. (Names deleted outright are handled above by unknownToolError.)
+      // Retired names a server lists as forwarding aliases still answer, but the parent is the one
+      // to script against. (Unlisted pre-0.7.0 names are handled above by unknownToolError.)
       if ((tool.description ?? '').startsWith('[DEPRECATED')) {
         const firstLine = (tool.description ?? '').split('\n')[0] ?? '';
         warn(`geoly: ${tool.name} is deprecated — ${firstLine.slice(0, 160)}`);
@@ -93,8 +94,8 @@ export class CallCommand extends Command {
   }
 
   /**
-   * The server said "Tool X not found" for a name our tools/list cache still had (the minute
-   * after a deploy): when X is a removed name, answer with its replacement like the pre-check does.
+   * The server said "Tool X not found" for a name our tools/list cache still had: when X is a
+   * pre-0.7.0 name, answer with its replacement like the pre-check does.
    */
   private explainRemoved(err: unknown): unknown {
     if (!(err instanceof GeolyError) || !Object.prototype.hasOwnProperty.call(REMOVED_TOOLS, this.tool)) return err;

@@ -119,22 +119,25 @@ output shape (output is `--output json|raw`, everywhere).
   so `--time-range` used to run the default window and `--brand_id` on a single-brand token
   used to return the default brand's numbers, both exit 0. `--brand`, `--brand_id` and
   `--org_id` on a tool that lacks them say so explicitly (switch organization with `--org`).
-- **Removed tool names say where they went.** The 2026-09-29 tool-surface consolidation (GEOly
-  skill 0.7.0) deleted 34 tool names outright — no forwarding aliases: 16 brand-own (e.g.
+- **Pre-0.7.0 tool names say where they went.** The 2026-09-29 tool-surface consolidation (GEOly
+  skill 0.7.0) took 34 tool names off the tool list. The server (`/api/mcp` = GEOly MCP v1,
+  `GEOly-MCP-Version: 1`) still accepts them as hidden, unmaintained compatibility names, so
+  scripts that call the endpoint directly keep working; the CLI calls listed tools only and
+  points at the current name instead: 16 brand-own (e.g.
   `get_url_reference_detail`, `get_competitor_polarity`, `get_prompt_record_summaries`, and the
   aliases `get_competitor_overview` / `get_brand_citations_daily` / `get_content_opportunities`)
   and 18 public (e.g. `compare_public_brands`, `get_public_topic_*`, `list_public_locales`,
   `get_available_platforms`). `geoly call`, `geoly schema` and `geoly call <tool> --help` on one of
   them is still a usage error (exit 2), but the message names the tool that absorbed it and the
-  `hint` gives the new call, e.g. `Unknown tool "get_url_reference_detail": removed on
-  2026-09-29 … — it is now get_url_detail` / `hint: Call geoly call get_url_detail
+  `hint` gives the new call, e.g. `Unknown tool "get_url_reference_detail": not in the tool list
+  since 2026-09-29 … — it is now get_url_detail` / `hint: Call geoly call get_url_detail
   --window_caliber rolling … — same read model, arguments and price; keep the other arguments
   of the old call.` Where the replacement is not drop-in (a different response shape or price,
   a renamed parameter, a different question) the hint says so. The table ships in the binary
   (`src/removed-tools.ts`) and is consulted only when the server does not list the name, so
-  it stays silent against a server that still has the old tools; a name the server itself
-  answers with `Tool … not found` (a tool list cached from before a deploy) gets the same
-  answer. Other unknown names keep the nearest-name suggestion.
+  it stays silent against a server that still lists the old tools; a name the server itself
+  answers with `Tool … not found` (e.g. an old public name on a token below the Grow plan) gets
+  the same answer. Other unknown names keep the nearest-name suggestion.
 - **`geoly` with no arguments is the product**: an interactive session. You type, the agent
   works, you watch what it runs. `/help` lists the in-session commands (`/new`, `/memory`,
   `/tools`, `/exit`); Ctrl-C interrupts the running turn without ending the session, Ctrl-D
@@ -184,7 +187,7 @@ shopping shelves, ads, source scorecards, sentiment, locale and category browsin
 on demand with `find_tools`, and you will see a `+ tool_name` line when it does. This keeps the
 choice in front of the model small and relevant; nothing is out of reach.
 
-Tool names removed in the 2026-09-29 consolidation are understood too: `find_tools` ranks the
+Pre-0.7.0 tool names (unlisted by the 2026-09-29 consolidation) are understood too: `find_tools` ranks the
 tool that absorbed an old name (or a word of it — "compare", "difficulty", "locales") first
 and says how to call it, and a direct call to an old name comes back as an error naming the
 replacement and its arguments (e.g. `get_url_detail(window_caliber="rolling", …)`) with the
@@ -327,7 +330,8 @@ feeds `geoly <command> --help`; README mirrors it verbatim.
   `kind: grant_missing` (exit 3) naming the resource to tick. `geoly tools --json` marks
   retired forwarding aliases with `deprecated: true`, and `geoly call` on one prints a one-line
   deprecation warning on stderr (the call still runs). Since the 2026-09-29 consolidation the
-  server keeps no such aliases — removed names fail with their replacement in the hint (see
+  server lists no such aliases — the pre-0.7.0 names are hidden on MCP v1 (still accepted
+  server-side, unmaintained), and the CLI answers them with their replacement in the hint (see
   `geoly call` above).
 - `geoly run --allow-writes` asks the hosted agent for the same write tools (server
   `allow_writes`); the server grants them per resource from the same consent Write bits, and a

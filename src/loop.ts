@@ -652,8 +652,9 @@ export class AgentSession {
       name: t.name,
       description: t.description ?? '',
     }));
-    // 查询里直接写了已删除的旧工具名（模型的旧记忆、旧技能、续跑的旧对话）：先说清它并进了哪个
+    // 查询里直接写了 0.7.0 之前的旧工具名（模型的旧记忆、旧技能、续跑的旧对话）：先说清它并进了哪个
     // 工具、怎么调；searchCatalog 已按旧名给新入口加权，新入口会排在命中的第一位。
+    //（服务端 MCP v1 仍隐藏接受旧名，但本地 agent 只用列出的工具，这里只负责引导到新名。）
     const notes = this.removedNamesIn(query).map((old) => this.removedToolText(old));
     const matches = searchCatalog(catalog, query, this.active);
     if (matches.length === 0) {
@@ -677,7 +678,7 @@ export class AgentSession {
     return [...notes, ...taken.map((m) => `${m.name} — ${m.description.slice(0, 200)}`)].join('\n');
   }
 
-  /** 查询词里出现的已删除旧工具名（且服务端确实已不再列出它）。 */
+  /** 查询词里出现的 0.7.0 之前旧工具名（且服务端的工具列表里确实没有它）。 */
   private removedNamesIn(query: string): string[] {
     const listed = new Set(this.catalog.map((t) => t.name));
     const words = query.toLowerCase().split(/[^a-z0-9_]+/);
@@ -687,7 +688,7 @@ export class AgentSession {
   }
 
   /**
-   * 一个已删除旧名的说明：并进了哪个工具、新调用写法（函数调用形式），并把新入口装进工具面
+   * 一个 0.7.0 之前旧名的说明：并进了哪个工具、新调用写法（函数调用形式），并把新入口装进工具面
    * （与 find_tools 同一份额度）——光说「改用 X」而 X 不在工具面上，模型还得多搜一轮。
    *
    * `catalogIsCurrent=false`：会话的工具目录是部署前拿的旧列表（服务端刚回了 not found），
@@ -753,8 +754,9 @@ export class AgentSession {
         failed: false,
       };
     }
-    // 已删除的旧工具名（2026-09-29 合并，无别名）且服务端已不再列出：不必再发一次注定
-    // 「not found」的请求，直接告诉模型它并进了哪个工具、新写法，并把新入口装进工具面。
+    // 0.7.0 之前的旧工具名（2026-09-29 合并后不再列出；服务端 MCP v1 仍隐藏可调、不维护）且不在
+    // 本会话的工具列表里：本地 agent 只调列出的工具，直接告诉模型它并进了哪个工具、新写法，并把
+    // 新入口装进工具面，让模型改用新名。
     const isRemoved = Object.prototype.hasOwnProperty.call(REMOVED_TOOLS, call.name);
     if (isRemoved && !this.catalog.some((t) => t.name === call.name)) {
       return { text: `error: ${this.removedToolText(call.name)}`, failed: true };
@@ -775,7 +777,7 @@ export class AgentSession {
       return { text: serializeResult(unwrapToolResult(call.name, result)), failed: false };
     } catch (err) {
       const message = err instanceof GeolyError ? err.message : (err as Error).message;
-      // 部署后那一分钟：工具列表还是旧的、服务端已删了这个名字——同样换成新写法。
+      // 工具列表里有、服务端却回了 not found（例如该 token 本就够不到旧工具）——同样换成新写法。
       if (isRemoved && isToolNotFoundError(message)) {
         return { text: `error: ${this.removedToolText(call.name, false)}`, failed: true };
       }

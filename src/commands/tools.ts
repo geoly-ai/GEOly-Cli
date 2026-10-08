@@ -29,7 +29,8 @@ export class ToolsCommand extends GeolyCommand {
           access: toolAccess(t.name),
           // A server may keep retired names registered as forwarding aliases and mark them
           // `[DEPRECATED → parent]`; agents scripting against --json should skip those. (The
-          // 2026-09-29 consolidation deleted names outright instead — see removed-tools.ts.)
+          // 2026-09-29 consolidation unlisted the old names instead — the server still accepts
+          // them as hidden MCP v1 names; see removed-tools.ts.)
           ...(isDeprecated(t.description) ? { deprecated: true } : {}),
         })),
       );
@@ -80,7 +81,7 @@ function firstLine(text?: string): string {
 }
 
 /**
- * The usage error for a name the server does not list. A name removed in the 2026-09-29
+ * The usage error for a name the server does not list. A pre-0.7.0 name unlisted by the 2026-09-29
  * consolidation (removed-tools.ts) says which tool absorbed it and how to call that instead —
  * that table wins over the typo guess, which would otherwise offer a near-miss old name's
  * siblings. Anything else gets the nearest-name suggestion as before. `names` = this token's tool
