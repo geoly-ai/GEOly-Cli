@@ -13,7 +13,7 @@ import { GeolyCommand } from './base.js';
  * the free source trio (`get_public_sources_overview`, `get_public_source_domain_detail`,
  * `get_public_source_brand_conduit`) is not Grow-gated (it only needs the source read grant, on
  * by default); and `compare_public_brands` is no longer listed since the 2026-09-29 consolidation
- * (the server still accepts it as a hidden MCP v1 name, but tools/list does not carry it).
+ * (the server answers it as a hidden name until 2026-11-30, but tools/list does not carry it).
  * `search_public_entities` is the group's entry point ("call first") on both the old and the
  * consolidated surface.
  */

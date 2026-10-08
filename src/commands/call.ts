@@ -70,8 +70,8 @@ export class CallCommand extends Command {
             hint: writeGrantHint(this.tool, ctx),
           });
         }
-        // A pre-0.7.0 name (unlisted by the 2026-09-29 consolidation; still accepted by the
-        // server on MCP v1) is answered with its replacement call — the CLI calls listed tools only.
+        // A pre-0.7.0 name (unlisted by the 2026-09-29 consolidation; answered by the server until
+        // 2026-11-30, then removed) is answered with its replacement call — the CLI calls listed tools only.
         throw unknownToolError(this.tool, tools.map((t) => t.name));
       }
       // Retired names a server lists as forwarding aliases still answer, but the parent is the one

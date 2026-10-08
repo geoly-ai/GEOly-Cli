@@ -29,8 +29,8 @@ export class ToolsCommand extends GeolyCommand {
           access: toolAccess(t.name),
           // A server may keep retired names registered as forwarding aliases and mark them
           // `[DEPRECATED → parent]`; agents scripting against --json should skip those. (The
-          // 2026-09-29 consolidation unlisted the old names instead — the server still accepts
-          // them as hidden MCP v1 names; see removed-tools.ts.)
+          // 2026-09-29 consolidation unlisted the old names instead — the server answers them as
+          // hidden names until 2026-11-30 and then removes them; see removed-tools.ts.)
           ...(isDeprecated(t.description) ? { deprecated: true } : {}),
         })),
       );

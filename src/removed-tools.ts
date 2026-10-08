@@ -3,19 +3,22 @@
  *
  * On 2026-09-29 the GEOly tool surface was consolidated (geoly-app #1985, skill 0.7.0): related
  * tools became views / modes / parameters of one tool, and the old names left `tools/list`.
- * The server (`/api/mcp` = GEOly MCP v1, `GEOly-MCP-Version: 1`) still **accepts** all 34 of them
- * as hidden compatibility names — permanently, unmaintained, under the same versioning policy as
- * the Agent API — so existing scripts that call the endpoint directly keep working. The CLI only
- * calls tools the server lists, so this table is local guidance: it turns an old name into "it is
- * `get_url_detail` now — `geoly call get_url_detail --window_caliber rolling …`" so new work
- * moves to the current names. It never claims the old name stopped working on the server.
+ * The server (`/api/mcp` = GEOly MCP v1, `GEOly-MCP-Version: 1`) still **answers** 31 of them as
+ * hidden names **until 2026-11-30 and then removes them** (afterwards `Tool … not found`, as if they
+ * never existed); successful old-name results carry `_deprecated { sunset: "2026-11-30", use }`.
+ * The other three (get_competitor_overview, get_brand_citations_daily, get_content_opportunities)
+ * were not drop-in and are **already removed**: until the same date the server only returns a
+ * free `TOOL_REMOVED` error naming the replacement. The CLI only calls tools the server lists, so
+ * this table is local guidance: it turns an old name into "it is `get_url_detail` now —
+ * `geoly call get_url_detail --window_caliber rolling …`" so work moves to the current names
+ * before the sunset date.
  *
  * Source: geoly-app `skills/geoly-mcp/references/tools-catalog.md` § Pre-0.7.0 brand-own names and
  * § Pre-0.7.0 public names (same mapping as the server's `src/mcp/legacy-tool-aliases.ts`). Every
  * entry selects the old behaviour with the **same read model, arguments, price and timeout**
- * unless its `note` says otherwise — the three deprecated aliases unlisted in the same release
+ * unless its `note` says otherwise — the three removed, non-drop-in names
  * (get_competitor_overview, get_brand_citations_daily, get_content_opportunities) are the
- * exceptions and say so (their hidden names keep the pre-0.7.0 handler; the replacements differ).
+ * exceptions and say so (`notDropIn`; the replacements differ in shape, price or question).
  *
  * Only consulted when the server does not list the name: against a server from before the
  * consolidation the old names are listed normally and this table stays silent.
@@ -36,8 +39,9 @@ export interface RemovedTool {
   /** A caveat worth knowing (a default, a renamed parameter, a price), when there is one. */
   note?: string;
   /**
-   * The three deprecated aliases unlisted in the same release: their replacement is a different
-   * shape, price or question, so the hint must not say "same arguments, same numbers".
+   * The three non-drop-in names, already removed on the server (free `TOOL_REMOVED` until
+   * 2026-11-30): their replacement is a different shape, price or question, so the hint must not
+   * say "same arguments, same numbers".
    */
   notDropIn?: true;
 }
@@ -179,6 +183,9 @@ export const REMOVED_TOOLS: Readonly<Record<string, RemovedTool>> = {
 /** When the consolidation unlisted the old names — quoted in every message so a reader can date the change. */
 const REMOVED_ON = '2026-09-29';
 
+/** After this date the server no longer recognises any pre-0.7.0 name (`Tool … not found`). */
+export const LEGACY_SUNSET = '2026-11-30';
+
 /** `--name value` for the CLI: JSON arrays in single quotes, placeholders verbatim. */
 function cliArg(name: string, value: ArgValue): string {
   if (typeof value === 'object' && !Array.isArray(value)) return `--${name} ${value.placeholder}`;
@@ -201,8 +208,9 @@ export function replacementCall(entry: RemovedTool, style: 'cli' | 'fn'): string
 
 /**
  * The one-paragraph explanation for a pre-0.7.0 name, or undefined when `name` is not one.
- * Wording rule: the name is unlisted, not dead — the server still accepts it (MCP v1, hidden,
- * unmaintained); the CLI just points at the current name.
+ * Wording rule: a drop-in name still answers on the server until 2026-11-30 and is then removed;
+ * the three non-drop-in names are already removed (free TOOL_REMOVED notice until that date).
+ * Either way the CLI points at the current name.
  * `available` = the tool names this token actually has, to flag a replacement it does not have
  * either (e.g. public tools below the Grow plan).
  */
@@ -213,7 +221,9 @@ export function removedToolAdvice(
 ): { message: string; hint: string; replacement: string } | undefined {
   const entry = Object.prototype.hasOwnProperty.call(REMOVED_TOOLS, name) ? REMOVED_TOOLS[name] : undefined;
   if (!entry) return undefined;
-  const message = `Unknown tool "${name}": not in the tool list since ${REMOVED_ON} — a pre-0.7.0 name that GEOly MCP v1 still accepts from existing scripts (hidden, unmaintained), but the CLI calls listed tools only; it is now ${entry.tool}`;
+  const message = entry.notDropIn
+    ? `Unknown tool "${name}": not in the tool list since ${REMOVED_ON} — a pre-0.7.0 name that was removed in the 0.7.0 consolidation (the server only returns a free TOOL_REMOVED notice until ${LEGACY_SUNSET}, then stops recognising it); it is now ${entry.tool}`
+    : `Unknown tool "${name}": not in the tool list since ${REMOVED_ON} — a pre-0.7.0 name that the server still answers until ${LEGACY_SUNSET} and then removes; it is now ${entry.tool}`;
   const missing =
     available && !available.has(entry.tool)
       ? ` Note: ${entry.tool} is not in this authorization's tool list either${style === 'cli' ? ' (see `geoly tools`)' : ''}.`
@@ -228,10 +238,11 @@ export function removedToolAdvice(
 }
 
 /**
- * Whether a server error is "no such tool". The server accepts the pre-0.7.0 names on v1, but it
- * still answers `MCP error -32602: Tool <name> not found` when this token could not reach the old
- * tool either (e.g. a public name below the Grow plan, or a missing read grant) — then the
- * CLI's table answers with the replacement instead of the bare error.
+ * Whether a server error is "no such tool". Until 2026-11-30 the server still answers the drop-in
+ * pre-0.7.0 names, but it replies `MCP error -32602: Tool <name> not found` when this token could
+ * not reach the old tool either (e.g. a public name below the Grow plan, or a missing read grant),
+ * and for every old name after the sunset date — then the CLI's table answers with the
+ * replacement instead of the bare error.
  */
 export function isToolNotFoundError(text: string): boolean {
   return /\bTool\s+\S+\s+not found\b/i.test(text);
