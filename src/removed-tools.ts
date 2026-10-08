@@ -3,7 +3,7 @@
  *
  * On 2026-09-29 the GEOly tool surface was consolidated (geoly-app #1985, skill 0.7.0): related
  * tools became views / modes / parameters of one tool, and the old names left `tools/list`.
- * The server (`/api/mcp` = GEOly MCP v1, `GEOly-MCP-Version: 1`) still **answers** 31 of them as
+ * The server (`/api/mcp/v1` = GEOly MCP v1, also served at `/api/mcp`; `GEOly-MCP-Version: 1`) still **answers** 31 of them as
  * hidden names **until 2026-11-30 and then removes them** (afterwards `Tool … not found`, as if they
  * never existed); successful old-name results carry `_deprecated { sunset: "2026-11-30", use }`.
  * The other three (get_competitor_overview, get_brand_citations_daily, get_content_opportunities)

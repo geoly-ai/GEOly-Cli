@@ -120,7 +120,7 @@ output shape (output is `--output json|raw`, everywhere).
   used to return the default brand's numbers, both exit 0. `--brand`, `--brand_id` and
   `--org_id` on a tool that lacks them say so explicitly (switch organization with `--org`).
 - **Pre-0.7.0 tool names say where they went.** The 2026-09-29 tool-surface consolidation (GEOly
-  skill 0.7.0) took 34 tool names off the tool list. The server (`/api/mcp` = GEOly MCP v1,
+  skill 0.7.0) took 34 tool names off the tool list. The server (`/api/mcp/v1` = GEOly MCP v1, also served at `/api/mcp`;
   `GEOly-MCP-Version: 1`) still answers them as hidden names **until 2026-11-30 and then removes
   them** (successful old-name results carry `_deprecated.sunset`); three of them —
   `get_competitor_overview` / `get_brand_citations_daily` / `get_content_opportunities`, not

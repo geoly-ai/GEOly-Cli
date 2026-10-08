@@ -125,11 +125,15 @@ zero-install setup (Claude Desktop, Cowork, Codex, cloud agents), connect the re
   "mcpServers": {
     "geoly": {
       "type": "http",
-      "url": "https://app.geoly.ai/api/mcp"
+      "url": "https://app.geoly.ai/api/mcp/v1"
     }
   }
 }
 ```
+
+`/api/mcp/v1` is the versioned address of GEOly MCP v1; the unversioned `/api/mcp` serves the
+same thing and stays available for existing configs. A breaking change would ship as
+`/api/mcp/v2` alongside, with v1 left as is.
 
 Codex users can install the plugin (MCP + skill) from
 [geoly-ai/codex-plugins](https://github.com/geoly-ai/codex-plugins).

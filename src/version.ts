@@ -4,8 +4,13 @@ export const VERSION = '0.3.3';
 /** MCP protocol version this client speaks. */
 export const MCP_PROTOCOL_VERSION = '2025-06-18';
 
-/** Default remote MCP endpoint (the single production tool surface). */
-export const DEFAULT_ENDPOINT = 'https://app.geoly.ai/api/mcp';
+/**
+ * Default remote MCP endpoint: GEOly MCP v1 at its versioned address. The unversioned
+ * `/api/mcp` is the same handler and stays served for existing configs; a breaking change would
+ * ship as `/api/mcp/v2` next to it. The endpoint is never persisted — credentials are keyed by
+ * origin only — so a signed-in user simply follows this default on the next run.
+ */
+export const DEFAULT_ENDPOINT = 'https://app.geoly.ai/api/mcp/v1';
 
 /**
  * Release manifest consumed by `geoly upgrade` and the daily update notice.
