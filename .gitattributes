@@ -1,0 +1,9 @@
+# The generated skill bundle is produced with LF and compared byte-for-byte by
+# `scripts/gen-skill-bundle.mjs --check` (the release gate). Without this, a Windows
+# checkout turns it into CRLF and `--check` reads it as "stale" though the content is
+# identical — which would block `scripts/release.mjs` on Windows. Pin it to LF.
+src/skill-bundle.generated.ts text eol=lf
+
+# Skill source files are published as LF from Linux (app.geoly.ai); the bundle hashes
+# them LF-normalized. Keep the local checkout LF too so every parity check agrees.
+skills/** text eol=lf
