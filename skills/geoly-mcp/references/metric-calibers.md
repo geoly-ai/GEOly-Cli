@@ -16,7 +16,7 @@ number to quote. When in doubt, the headline KPI always comes from `get_brand_ov
 | **citationRate** | % of answers that cite a brand-owned URL | completed records (prompt-equal) | `get_brand_overview` (headline) |
 | **AIGVR** | composite visibility score `m × (0.4·position + 0.25·frequency + 0.25·citation)` | completed records | `get_brand_overview` (headline) |
 | **Share of Mentions (SoM)** — prompt level | brand's share of mentioned answers vs the **auto-discovered / entity-layer** competitors of ONE prompt: brand somRanked records ÷ (somRanked + every competitor's mentioned records) | all brand-mentioned records of that prompt | `get_prompt_list` (`include_competitors=true`, `geoMetrics.som.share`) / `get_prompt_detail` (`overview.brandShare`, windowed) |
-| **Share of Mentions (SoM)** — cross-prompt | **records-based**: each brand counts at most once per AI answer, vs **automatically discovered** competitors | all brand-mentioned records | `get_platform_matrix` (and the deprecated `get_competitor_overview`, same query; since 2026-07-24, was visibility-weighted) |
+| **Share of Mentions (SoM)** — cross-prompt | **records-based**: each brand counts at most once per AI answer, vs **automatically discovered** competitors | all brand-mentioned records | `get_platform_matrix` `dimension=competitor` (since 2026-07-24, was visibility-weighted) |
 | **Share of voice (SoV)** — the in-app KPI cell | brand's mentioned answers ÷ (that number + every **auto-discovered** brand's mentioned answers), bucketed by UTC+8 business day — the **legacy discovered-brand caliber**, not the entity board | all brand-mentioned records in the window | `get_brand_overview` (`shareOfVoice.share`) — differs from `get_brand_board.ownBrand.share` (entity set) and `get_platform_matrix` SoM (entity-layer denominator) |
 | **recordCitationRate** | pooled `cited records / completed records` (record-weighted) | completed records | `query_analytics` metric |
 | **Entity visibility** (`brand_entity_v1`) | % of completed answers that mention the **brand entity** (own brand and each confirmed competitor on the **same** formula, pooled over covered days) | completed records in the covered window | `get_brand_board` **without `topic_ids`/`country`** (`ownBrand.visibility`, `rows[].visibility`) — the in-app `/performance` board |
@@ -28,7 +28,7 @@ Distinctions to never blur:
 - **citationRate (record-based) ≠ citation URL counts** — `get_citation_overview` counts
   URLs/domains, not records.
 - **AIGVR ≠ SoM** — absolute visibility vs relative share against competitors.
-- **Entity caliber ≠ discovered-brand caliber** — `get_brand_board` counts **brand entities** (dictionary-resolved, family-folded, confirmed set) with one formula for you and rivals; `get_competitor_overview` / `get_platform_matrix` count raw discovered-brand surfaces (record-weighted). Same window, different row sets and denominators — never merge their numbers in one table.
+- **Entity caliber ≠ discovered-brand caliber** — `get_brand_board` counts **brand entities** (dictionary-resolved, family-folded, confirmed set) with one formula for you and rivals; `get_platform_matrix` counts raw discovered-brand surfaces (record-weighted). Same window, different row sets and denominators — never merge their numbers in one table.
 
 AIGVR formula reference: `V = m × (0.4·P + 0.25·F + 0.25·C)` where P = position score (1/pos),
 F = frequency `min(mentions,3)/3`, C = citation (brand-owned URL present = 1), m = mentioned
@@ -66,8 +66,8 @@ prompt-level breakdowns instead of re-deriving from raw citations.
 1. **KPI baseline = `get_brand_overview`.** Its `aigvr.{score,mentionRate,citationRate}`
    are the headline numbers and match what the customer sees in the GEOly app. Quote these
    for any "what is our citation/mention/visibility rate" question. Nothing else is the headline.
-2. **Never arithmetic-average a daily series.** `query_analytics` (dataset `brand_citations_daily`;
-   the deprecated alias `get_brand_citations_daily` returns the same rows) gives **per-day** rates. For a window number use `get_brand_overview`, the `recordCitationRate`
+2. **Never arithmetic-average a daily series.** `query_analytics` (dataset `brand_citations_daily`)
+   gives **per-day** rates. For a window number use `get_brand_overview`, the `recordCitationRate`
    metric, or re-aggregate daily rows **weighted by `completedRecords`**.
 3. **A gap in a daily line means "no monitoring ran that day", not "metric missing".**
    Read `completedRecords` per row: 0 or an absent row = no collection that day. AIGVR,
@@ -98,15 +98,14 @@ prompt-level breakdowns instead of re-deriving from raw citations.
   is the **per-day average** (the overview caliber). Same prompt, same window, different number.
 - **Mention rate numerator**: everything aligned to `position IS NOT NULL` (ranked) —
   `get_prompt_list geoMetrics.aigvr.mentionRate`, `get_prompt_detail.overview.mentionRate`,
-  `get_prompt_mention_rates.rankedRate`, `get_brand_overview.rankedCount`. The deprecated
-  `get_prompt_mention_rates.mentionRate` uses `mentions > 0` (= `mentionedCount`); by definition it
+  `get_prompt_list` `view="mention_rates"` `rankedRate`, `get_brand_overview.rankedCount`. The deprecated
+  `mentionRate` column of that view uses `mentions > 0` (= `mentionedCount`); by definition it
   can only be ≥ rankedRate, and in current production data the two are identical (2026-09-20,
   every brand, zero gap) — the alignment is about the predicate, not a number change.
 - **Citations pagination**: raw mode (`deduplicate=false`) returns newest-first and is capped
   at 100/page; deep pages reach older days. Use `deduplicate=true` (up to 500/call) to get a
   URL-grouped source list with `share%` in one call and avoid deep paging.
-- **Competitor caliber**: `get_platform_matrix` (and the deprecated `get_competitor_overview`,
-  same query) is **record-weighted** SoM — never quote it as the brand headline KPI.
+- **Competitor caliber**: `get_platform_matrix` `dimension=competitor` is **record-weighted** SoM — never quote it as the brand headline KPI.
 - **Competitor rows come from the brand-entity layer, not from the LLM's competitor list**
   (2026-09-20 audit, `docs/mcp/COMPETITOR_TOOLS_CALIBER_AUDIT_2026-09.md`): a competitor's
   `mentionedRecords` in `get_platform_matrix` counts answers where its name matched the brand's
@@ -117,9 +116,9 @@ prompt-level breakdowns instead of re-deriving from raw citations.
   2026-09-20 audit: ~43% of a rival's name hits counted, ~39% needs_context, ~19% unmatched).
   That is why the matrix can show ~20% fewer answers for a rival than its LLM-judged rows:
   two populations, not a bug. The gap closes as pre-09-08 history rolls out of the window.
-- **Verdict tools changed source on 2026-09-20** — `get_competitor_polarity` reads
+- **Verdict tools changed source on 2026-09-20** — `get_verdict` `view="competitors"` reads
   `brand_mention_vote.stance` (page "who beats you"): only `weLose`, top 5, ≥3 answers, votes
-  since 2026-09-08; `get_risk_context_sources` reads the page's Sources tab (aspect votes ×
+  since 2026-09-08; `view="sources"` reads the page's Sources tab (aspect votes ×
   citations, `negativeShare` = own-entity negative aspect votes, window follows `time_range`, default 7d).
   Neither reconciles with pulls made before that date (old: LLM three-state sentiment on
   `prompt_record_mentioned_brand` with a presence gate / record-level negative-mixed sentiment
@@ -186,7 +185,7 @@ If two numbers disagree, it's almost always a caliber mismatch. Check, in order:
    different things.
 4. Do the **date windows / platforms** match? → align `time_range` / `start_date`+`end_date`
    and `platform` before comparing. Note the three citation tools (`get_citation_overview` /
-   `get_domain_detail` / `get_page_detail`) use **whole +08 calendar days on the
+   `get_domain_detail` / `get_url_detail window_caliber="page"`) use **whole +08 calendar days on the
    citation-creation axis + today** (their `window` field says so), while `get_brand_overview`
    uses a rolling `now − N×24h` window on `record_date` for its presets (`7d/30d/90d/180d`) and
    an exact +08 business-day range for `time_range=custom` — same `time_range`, different span.
@@ -202,11 +201,11 @@ If two numbers disagree, it's almost always a caliber mismatch. Check, in order:
 Four numbers changed **on purpose** — the new values are the correct ones. If an old report
 disagrees with a fresh pull, the fresh pull wins:
 
-1. **`get_brand_citations_daily.citationCount`** was **always 0** (a dead upstream table); it
+1. **Daily `citationCount`** (the brand daily trend, now `query_analytics` dataset=`brand_citations_daily`) was **always 0** (a dead upstream table); it
    now returns the real count of citation URLs collected that day. It is a **different
    numerator** from `citationRate` (% of prompts whose answers cite a brand-owned domain) —
    never divide one by the other, and never treat pre-fix zeros as "no citations".
-2. **`get_competitor_overview.brand.mentionRate`** is now a true mention rate (% of records
+2. **The competitor-overview brand `mentionRate`** (tool removed 2026-09-29; its hidden pre-0.7.0 name only returns a free `TOOL_REMOVED` notice until 2026-11-30) is now a true mention rate (% of records
    with mentions>0). It was previously a mention **density** (total mentions ÷ records × 100)
    that could exceed 100. Expect a downward step vs old pulls (e.g. 154 → 59) — not a decline
    in performance, a definition fix.
@@ -217,7 +216,7 @@ disagrees with a fresh pull, the fresh pull wins:
 4. **Public AI-search query tools exclude echo rewrites** (the user prompt bounced back
    verbatim by the platform). All `get_public_search_queries` facets and drill-downs count
    fewer — but honest — queries than pre-fix pulls.
-5. *(2026-07-24)* **`get_competitor_overview` (deprecated since 2026-09-20, shape unchanged) / `get_platform_matrix` `somShare` switched to
+5. *(2026-07-24)* **`get_platform_matrix` `somShare`** (and the competitor overview, unlisted on 2026-09-29) **switched to
    records-based Share of Mentions** (each brand counts at most once per answer ÷ all
    brand-mentioned records; both tools now also return `mentionedRecords`), and their
    competitor roster is now **automatically discovered brands** — not the user-tracked
@@ -225,7 +224,7 @@ disagrees with a fresh pull, the fresh pull wins:
    visibility-weighted shares over tracked competitors and will not reconcile.
    `get_prompt_detail`'s per-prompt SoM stays visibility-based vs tracked competitors.
    *(Superseded 2026-09-20, see §9.)*
-6. *(2026-09-20)* **`get_citation_overview` / `get_domain_detail` / `get_page_detail` moved to
+6. *(2026-09-20)* **`get_citation_overview` / `get_domain_detail` / `get_url_detail` (page caliber) moved to
    the /sources/citations page caliber**: the window is N whole Asia/Shanghai calendar days on the
    **citation-creation** axis plus today (was: `prompt_record.record_date` rolling N×24h for
    the overview, `created_at` rolling N×24h for the two details). Every response now carries
@@ -260,15 +259,15 @@ not reconcile field-by-field:
    (deprecated).
 3. **`get_prompt_record_detail`** adds `mentionedEntities` (entity layer + per-answer `stance`,
    same source as the answer dialog); `mentionedBrands` and `competitors` are deprecated.
-4. **`get_prompt_mention_rates`** sorts by and leads with `rankedRate` / `rankedCount`
+4. **`get_prompt_list` `view="mention_rates"`** sorts by and leads with `rankedRate` / `rankedCount`
    (`position IS NOT NULL`, the `/prompts` caliber); `mentionRate` / `mentionCount`
    (`mentions > 0`) are deprecated. Numbers do not move today (the two predicates agree on
    every current record); the tool now follows the page if they ever diverge.
 5. **`get_brand_search_queries` mode=`prompt_queries`** follows `time_range` (default 30d) and
    `platform` (default all entitled) like the prompt detail page, instead of a fixed 90-day
    ChatGPT-only window; extra fields `platformCodes`, `totalQueries`, `echoDistinctCount`,
-   `roots`, `competitorRoots`. Modes `roots` / `topic_roots` / `root_detail` are deprecated
-   (forwarded, `_deprecated` note in the response).
+   `roots`, `competitorRoots`. Modes `roots` / `topic_roots` / `root_detail` were removed on
+   2026-10-08 (rejected at the schema layer); `mode` is now required.
 
 ---
 
@@ -305,7 +304,7 @@ changed meaning it was renamed or removed, never silently re-valued:
    production). `highlights`, `brandCorrelation`, `positionAnalysis`, `platformEnhanced`
    (`avgMentions` / `avgPosition`) are gone. Reads the tenant daily rollup when available
    (`source: derived`), else one live aggregation (`source: live`) — same numbers.
-4. **`get_available_platforms` `scope=brand`** uses the public brand page's existence probe:
+4. **`get_public_coverage` view=`platforms` `scope=brand`** uses the public brand page's existence probe:
    identical platform set, `recordCount` is `null`, order is display priority rather than volume.
    Other scopes unchanged.
 
@@ -319,8 +318,8 @@ dialog, `/prompts/[id]`). Old pulls will not reconcile field-by-field:
 1. **Dates**: every record row carries `businessDay` (UTC+8 business day `YYYY-MM-DD`, the date
    the app shows). `recordDate` is the stored timestamp — business day D is stored as
    `(D−1)T16:00:00Z`, so quoting `recordDate`'s calendar date is one day early. Applies to
-   `get_prompt_record_detail`, `list_prompt_records`, `get_prompt_record_summaries`,
-   `get_brand_mention_samples`, `list_brand_answers` and raw `get_prompt_citations` rows.
+   `get_prompt_record_detail`, `list_prompt_records` (incl. `latest_per_platform=true`),
+   `list_brand_answers` (both views) and raw `get_prompt_citations` rows.
    `list_brand_answers.window` additionally echoes `startBusinessDay` / `endBusinessDay` = the
    FIRST / last business day the window actually covers (`endBusinessDay` is `null` when the
    window runs up to now). On a rolling window the lower bound is an arbitrary clock time, so
@@ -343,7 +342,7 @@ dialog, `/prompts/[id]`). Old pulls will not reconcile field-by-field:
    23:59:59.999), the same boundary as `list_prompt_records` and the page's custom window
    (was UTC midnight — pulls made before 2026-09-22 with `start_date` / `end_date` are shifted
    by 8h). Spans up to 366 days stay accepted (the page clamps to 90).
-6. **Platform gate**: `get_prompt_citations`, `list_prompt_records`, `get_brand_mention_samples`
+6. **Platform gate**: `get_prompt_citations`, `list_prompt_records`, `list_brand_answers` `view="mention_samples"`
    return an error object for an unknown or un-entitled platform code (the page fail-closes to
    an empty state). Previously `get_prompt_citations` read un-entitled history and the other two
    returned a silent empty result. `copilot` is a valid code.

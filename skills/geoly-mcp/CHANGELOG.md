@@ -2,6 +2,397 @@
 
 All notable changes to the `geoly-mcp` agent skill.
 
+## 0.7.0
+
+Tool-surface consolidation (2026-09-29), brand-own and public sides in one release: a read-only
+multi-org token now sees **47 tools instead of 76**. The largest surface a token can reach is **53**
+(a single-org, multi-brand token with write grants on Grow-tier or above); a multi-org token is always
+read-only — its write grants are clamped — so it tops out at 47. **Tool names: `tools/list` now
+lists only these 47 (at most 53) tools.** The 34 pre-0.7.0 names below are no longer listed; they
+stay callable on `/api/mcp/v1` (and `/api/mcp`) as **hidden names until 2026-11-30 and are then removed** (§ Versioning).
+31 of them forward to a view / mode / parameter of a remaining tool that runs the same read model
+with the **same arguments**, returns the **same response shape** and costs the **same credits** (per
+view), on that view's timeout; only the entry point changed. The three brand-own names that are
+**not drop-in** (§ Brand-own tools) — `get_competitor_overview`, `get_brand_citations_daily` and
+`get_content_opportunities` — are **removed**: until 2026-11-30 a call returns a free `TOOL_REMOVED`
+notice naming the replacement call (nothing runs, nothing is charged), after that the name is
+unknown. **Use the new names for all new work.** Moving off those three is not drop-in: `get_competitor_overview` → a new shape at deep 10
+credits per call with a 20/min guard (timeout 45s unchanged); `get_brand_citations_daily` → the full
+`query_analytics` recipe at light 1 credit / 30 per min (timeout 45s unchanged);
+`get_content_opportunities` → a different question on the gap table (timeout 20s). The hidden names
+exist on MCP only — the Agent API and the in-app agents (Sidekick) know just the new names. Full
+mapping: tools-catalog § Pre-0.7.0 brand-own names and § Pre-0.7.0 public names. **Kept:**
+`list_organizations` (released geoly CLI builds use it for org selection).
+
+**Timeouts follow the tool each view replaces, with these exceptions** (details in the sections
+below): the replacements of the three non-drop-in names above; `list_brand_answers` view=`table` (15s → 45s, which on the Agent API
+also puts it in the per-run heavy-tool gate); `get_public_search_query_detail` (its MCP budget
+20s → the target's 50s); and — in the app agents (Sidekick) and on the Agent API only — the public
+comparison (`brand_ids`), `rank_citation` / `rank_citation_rows` and `perception_mentions` views
+(15s → 50s, also gated).
+
+### Versioning
+
+- **MCP v1 lives at `/api/mcp/v1`** — the surface of this release (47 tools on a read-only multi-org
+  token, at most 53). **`/api/mcp` serves the same v1** (same handlers) and is kept for existing
+  configurations; new setups should use `https://app.geoly.ai/api/mcp/v1`. Both share one OAuth
+  resource (`https://app.geoly.ai/api/mcp`), so a token issued for either URL is valid on both.
+  v1 is declared in three places: every response (errors, 405 and SSE
+  included) carries the header `GEOly-MCP-Version: 1`; initialize returns `serverInfo.version`
+  `1.0.0`; and the initialize `instructions` open with a paragraph naming the version and the policy.
+- **Policy — the same as the Agent API (`GEOly-API-Version: 1`):** an old version keeps running,
+  unmaintained, and is not shut down. A breaking change would ship as v2 on a new path, and
+  `/api/mcp/v1` (and `/api/mcp`) would keep serving v1 unchanged. Additions — new tools, new views, new optional
+  parameters — ship on v1 without a version bump. There is no v2 today.
+- **The 34 pre-0.7.0 names are not part of v1 and have a hard sunset: they answer until 2026-11-30
+  (00:00 UTC) and are then removed** (owner decision 2026-10-08, replacing the earlier "kept with no
+  expiry"; tracked in issue #1998). Until then they stay hidden (not in `tools/list`) and MCP-only;
+  after it a call to an old name gets the same "Tool … not found" error as a name that never
+  existed. The initialize `instructions` say so too: "Pre-0.7.0 tool names answer until 2026-11-30
+  and are then removed."
+  - The 31 drop-in names keep forwarding until then. The usage log records the old name you called.
+    Every successful object-shaped result carries a top-level `_deprecated`
+    `{ deprecated, since: "0.7.0", sunset: "2026-11-30", use, message }` block — `use` is the listed
+    call to migrate to, `message` says the name stops working on 2026-11-30 (bare-array results and
+    errors carry none); timeout messages keep naming the old name you called. New parameters and
+    views are added only under the new names.
+  - The 3 non-drop-in names (`get_competitor_overview`, `get_brand_citations_daily`,
+    `get_content_opportunities`) are removed now: their pre-0.7.0 handlers and prices are gone. Until
+    2026-11-30 a call returns a free structured error — first line
+    `TOOL_REMOVED: <name> was removed in the 0.7.0 consolidation and is not drop-in replaceable; it stops being recognised on 2026-11-30.`
+    plus a one-sentence migration recipe, then
+    `{ "error": "TOOL_REMOVED", "tool", "sunset": "2026-11-30", "use", "charge": "none" }` with the
+    full replacement call from tools-catalog § Pre-0.7.0 brand-own names. Nothing runs and nothing
+    is charged.
+- **The seven retired modes are removed** — `get_brand_search_queries` mode=`roots` / `root_detail` /
+  `topic_roots` (with `root_key`, also gone as an alias of `normalized_query`) and
+  `get_public_search_queries` mode=`queries` / `themes` / `brand_landscape` / `prompt_map` (with
+  `page` / `page_size` / `coverage` / `sort`, which only they read) are rejected at the schema layer,
+  not charged. `mode` is now required on both tools, with no default (the old defaults `overview` /
+  `queries` are not silently replaced by another mode): pass `mode="overview"` for the old default of
+  `get_brand_search_queries`, and pick `territories` / `query_detail` / `theme_detail` /
+  `product_spaces` on `get_public_search_queries`.
+- **Pre-0.7.0 names inherit the schema-layer rejections of the tool they forward to.** A parameter
+  the old tool silently ignored in that mode — e.g. `get_public_brand_rank_citation` mode=`board` with
+  the rows-only `quadrant` / `page_size` / `snapshot_key` / `page` — is now rejected for free before
+  anything runs (the old tool ran and charged anyway). Drop the parameter, or switch to the listed tool.
+
+### Brand-own tools
+
+- **Merged (same numbers, new entry point):**
+  - `list_citation_domains` → `get_citation_overview` `section="table"` (default `section="board"` =
+    the old `get_citation_overview`; board stays 10 credits, table stays 3).
+  - `get_page_detail` + `get_url_reference_detail` → **`get_url_detail`** with `window_caliber`:
+    `"rolling"` (default; the old `get_url_reference_detail` — rolling / custom window, ChatGPT
+    search sources, `prompt_id`) or `"page"` (the old `get_page_detail` — the /sources/citations
+    page window). The two calibers are not interchangeable; quote the one you asked for.
+  - `get_competitor_polarity` + `get_risk_context_sources` → **`get_verdict`** with a **required**
+    `view`: `"competitors"` (default window 30d) or `"sources"` (default window still 7d — pass
+    `time_range=30d` to match the page).
+  - `get_prompt_mention_rates` → `get_prompt_list` `view="mention_rates"` (worst first by default;
+    `sort_order` defaults to `asc` in this view, `desc` in the table).
+  - `get_prompt_record_summaries` → `list_prompt_records` `latest_per_platform=true` (same bare array).
+  - `get_brand_mention_samples` → `list_brand_answers` `view="mention_samples"`.
+  - `get_audit_pages` → `get_audit_detail` `section="pages"`.
+  - `get_agent_ready_scan_detail` → `get_agent_ready_scans` with `scan_id`.
+  - `get_ga4_traffic_data` + `get_cf_traffic_data` (+ the `get_ga4_page_data` alias) →
+    **`get_traffic_data`** with a **required** `source`: `"ga4"` (add `page_path` for one page;
+    default 30d) or `"cloudflare"` (default 7d). `source="ga4"` + `page_path` is one view for both
+    former entry points: its timeout hint no longer suggests narrowing `platforms` (the page-level
+    read ignores it) and an over-long result's truncation hint is the ga4 view's (`landing_page_limit`
+    / `platforms`).
+  - For `get_agent_ready_scan_detail` and `get_ga4_page_data` the parameter that used to be required
+    (`scan_id`, `page_path`) now selects the view: leaving it out returns the other, valid view (the
+    scan list / the site-wide GA4 view) instead of an error.
+- **Unlisted deprecated aliases — the replacements are NOT drop-in** (all three still had real
+  traffic: last 90 days `get_competitor_overview` 779 calls / 115 orgs, `get_brand_citations_daily`
+  764 / 71, `get_content_opportunities` 457 / 68). The old names are removed — until 2026-11-30 they
+  only return a free `TOOL_REMOVED` notice (§ Versioning); what changes when you move to the
+  replacement is below (exact migration in tools-catalog § Pre-0.7.0 brand-own names):
+  - `get_brand_citations_daily` → `query_analytics` returns the old rows **only with the full
+    recipe** `query_analytics({ dataset: "brand_citations_daily", start_date, end_date, platform, dimensions: ["date","platform","platformName"], metrics: ["citationCount","mentionCount","mentionedRecords","completedRecords","brandCitationRecords","aigvr","mentionRate","citationRate","sentiment.positive","sentiment.neutral","sentiment.negative","sentiment.mixed","sentiment.unknown","sentiment.scoredRecords","sentiment.avgScore"], limit: 1000 })`. With just `dataset="brand_citations_daily"` you get the 6 default metrics and
+    no `platformName` / `mentionedRecords` / `brandCitationRecords` / `sentiment.*`. The response is
+    `rows[]` with flattened `sentiment.*` columns (no `sentiment {}` object); more than 1000
+    date × platform rows (roughly > 166 days on all platforms) must be split into shorter windows —
+    the old alias returned them all. Priced as `query_analytics`: **light 1 credit per call, guarded
+    30 calls/min** (the old alias: standard 3 credits, 20/min); same 45s timeout.
+  - `get_competitor_overview` → `get_platform_matrix({ dimension: "competitor", competitor_limit: 20,
+    include_totals: true })`: same query, same competitor set, same per-platform values and the same
+    cross-platform totals — the shape changes (brand = the first row's `totals`, competitors = the
+    other rows' `totals` + `platforms` cells; mapping in tools-catalog), rows are ranked by `metric`
+    instead of by mentions, and there is no `domain` field (`logoUrl` carries one). Keep the default
+    `metric="aigvr"`: the old tool always picked its competitors by aigvr. Without the two new
+    parameters the matrix is unchanged (the overall market Top 5 by `metric`, plus your brand pinned
+    first when it is not among them — 5 or 6 rows). It is priced deep 10
+    credits per call with a guarded rate limit (the old tool: standard 3).
+- **`get_platform_matrix` gains two `dimension="competitor"`-only parameters** (owner decision
+  2026-09-29, restoring what the now-unlisted `get_competitor_overview` offered): `competitor_limit` (1–20)
+  returns your brand + up to N competitors ranked by `metric` (your brand does not take a slot; with
+  `metric="citation"` the N are taken by entity id and only re-sorted by citation — they are not the
+  most-cited competitors; the default Top 5 under that metric has always worked this way), and
+  `include_totals=true` adds `totals { totalRecords, totalMentions, mentionedRecords, avgVisibility,
+  somShare }` (+ `mentionRate` on your brand row) across all platform columns — record-weighted, with
+  the Share-of-Mentions denominator taken over **all** brand-mentioned records, not just the rows
+  returned. Same read model and price (deep 10 / guarded) and the same 45s budget; omitting both
+  leaves the output byte-for-byte unchanged (only the hint on an over-long, truncated matrix now names
+  `competitor_limit`). Passing either with `dimension="topic"` is rejected
+  before execution and not charged.
+  - `get_content_opportunities` → `get_citation_overview` `section="table"`, `gap_only=true` answers
+    a **different question**: domains where a registered competitor is mentioned and you are not,
+    not prompts where one domain is missing (for one domain's prompts read `get_domain_detail`
+    `prompts[]`). Same price (standard 3 per call); the timeout is the table view's **20s** (the old
+    tool: 15s). On very large brands the gap table can exceed its 20s budget on a cold cache
+    (observed: a 30d call on a top-tier brand timed out) — narrow `time_range` / `platform` /
+    `topic_ids` first.
+- **Resource grants (consent / API-key read bits) of the two non-drop-in replacements.**
+  `get_platform_matrix` is registered under the **platform** read bit and `query_analytics` under
+  **analytics**, while the unlisted `get_competitor_overview` sits under **competitor** and
+  `get_brand_citations_daily` under **brand**:
+  - `competitor_limit` / `include_totals` (the old 20 competitors + cross-platform totals) still need
+    **competitor** read: on a token without it they are rejected before execution (not charged) and
+    the matrix keeps its Top 5 cells — exactly what such a token could see before;
+  - a token with competitor read but **without platform read** no longer reaches that data (the matrix
+    is not registered for it), and a token with brand read but **without analytics read** no longer
+    reaches the daily rows (`query_analytics` is not registered for it) — re-authorize with platform /
+    analytics read. Tokens with default (full) read grants are unaffected.
+- **`list_brand_answers` timeout 15s → 45s** for the table view (it failed ~11% of the time at 15s);
+  the mention-samples view keeps 15s. `tools/list` `_meta["geoly/timeoutMs"]` announces the largest
+  view's budget. **On the Agent API the table view (also when `view` is omitted) now passes through
+  the per-run heavy-tool gate**, like every other 45s database tool (at most 2 running + 4 queued per
+  run; beyond that the call is refused with a "not started" message); the mention-samples view stays
+  outside the gate.
+
+### Public / industry tools: 29 → 13
+
+- **Unlisted deprecated 0.6.x aliases** (their targets already existed; the names stay callable
+  as hidden names until 2026-11-30, forwarding to the targets below):
+  `get_public_brand_perception_aspect_mentions` → `get_public_brand` view=`perception_mentions`
+  (`aspect` = the old `normalized_label`); `get_public_search_query_detail` →
+  `get_public_search_queries` mode=`query_detail` / `theme_detail`;
+  `get_public_shopping_card_detail` → `get_public_shopping_product_detail` mode=`card`.
+  A former `get_public_search_query_detail` call now runs on the target's own MCP budget: **50s
+  instead of the alias's 20s** (unchanged for `get_public_search_queries` itself).
+- **`get_public_topic(view=…)`** replaces eight topic tools:
+
+  | Old tool | New call |
+  |---|---|
+  | `get_public_topic_overview` | `get_public_topic` view=`overview` (default) |
+  | `get_public_topic_brand_leaderboard` | view=`brand_leaderboard` |
+  | `get_public_topic_som_trend` | view=`som_trend` |
+  | `get_public_topic_prompt_matrix` | view=`prompt_matrix` |
+  | `list_public_topic_prompts` | view=`prompts` |
+  | `get_public_topic_citation_domains` | view=`citation_domains` |
+  | `get_public_topic_commerce` | view=`commerce` |
+  | `get_topic_competition_difficulty` | view=`difficulty` (`topic_id` \| `prompt_id` \| `product_space_id`) |
+
+  `get_public_topic_prompt_detail` and `get_public_topic_record_detail` stay separate drill-downs.
+- **`get_public_brand`** now also covers:
+
+  | Old tool | New call |
+  |---|---|
+  | `compare_public_brands` | `get_public_brand` with `brand_ids` (2–4) + the facet `view` (omitted ⇒ `visibility`, the old default; a single `brand_id` still defaults to `overview`) |
+  | `get_public_brand_perception` mode=`profile` / `aspect_mentions` | view=`perception` / `perception_mentions` |
+  | `get_public_brand_rank_citation` mode=`board` / `rows` | view=`rank_citation` / `rank_citation_rows` |
+
+- **`get_public_coverage(view=…)`** (free, `view` required) replaces `list_public_locales`
+  (view=`locales`), `get_available_platforms` (view=`platforms`) and `get_public_data_window`
+  (view=`data_window`).
+- **`list_public_shopping_products`** gains view=`boards` = the former
+  `list_public_shopping_boards`. ⚠️ `page` is **1-based for view=`products`** (1..100, the default
+  view) and **0-based for view=`boards`** (0..199) — both bases are unchanged from the old tools;
+  a products `page=0` is rejected with "products pages start at 1; boards pages start at 0".
+- `get_public_shopping_product_detail` mode=`card` accepts `days` **1–180** again (the 0.6.x
+  card alias did; a lookback over 90 days costs 2x, like before). mode=`full` stays 1–90.
+- Compatibility scope keys (`brand_id`, `org_id`) stay **accepted and ignored** wherever the
+  chosen view does not read them — e.g. `get_public_coverage` view=`locales` with `brand_id`, or a
+  `brand_ids` comparison that also carries `brand_id` (the old compare tool ignored it too). On the
+  Agent API such a key is dropped before validation only when the (merged) tool does not declare it,
+  so the verdict on a wrong-typed `brand_id` (e.g. a number) now follows the merged tool: the
+  comparison views and `get_public_coverage` view=`locales` reject it (as MCP and Sidekick always
+  did), mode=`card` and the search detail modes drop it.
+- Timeout copy and retry guidance are **per view** and match the tool each view replaces (e.g.
+  view=`locales` / `data_window` keep "wait ~60s and retry once", view=`platforms` makes no retry
+  promise, view=`difficulty` says none of its arguments shrink the query).
+- Timeouts per tool: `get_public_brand`, `get_public_coverage` and `list_public_shopping_products`
+  run on the 50s tier on MCP (every view they absorbed already did there); `get_public_topic` stays
+  on the 20s default like the eight tools it replaces. **In the app agents (Sidekick) and on the
+  Agent API** the comparison (`brand_ids`), `rank_citation` / `rank_citation_rows` and
+  `perception_mentions` (vs its old alias; the old perception tool was already 50s) move from 15s to
+  the 50s `get_public_brand` already had, and — as heavy database tools — on the Agent API they now
+  pass through the per-run heavy-tool gate (at most 2 running + 4 queued; beyond that the call is
+  refused with a "not started" message).
+- Unchanged: `search_public_entities`, `list_public_topics`, `get_category_whitespace`,
+  `get_public_sources_overview`, `get_public_source_domain_detail`,
+  `get_public_source_brand_conduit`, `resolve_my_brand_public`. **Same views and prices, stricter
+  parameter validation** (§ Parameter errors): `get_public_category`, `get_category_brand_momentum`,
+  `get_public_search_queries` (and `get_public_shopping_product_detail` above).
+  `get_public_category` view=`overview` still takes an optional `product_space_id` next to `slug`:
+  when that overview comes back empty the envelope lists `availableLocales` + `availablePlatforms`
+  for the category, exactly as before.
+- **Cost lines now list every view:** `get_public_brand` view=`citation_totals` (10 credits per
+  call; per brand in a comparison) and `get_public_search_queries` mode=`territories` (3 per call)
+  were already charged exactly this — silently, as the menu's top price — but were missing from the
+  Cost line; they are now registered prices, so the Cost line shows them. Amounts unchanged.
+
+### Parameter errors are rejected before execution and never charged
+
+Owner decision 2026-09-29, the same on every surface: MCP returns an invalid-params error (`-32602`,
+like an unknown argument before the merge); the in-app agents (Sidekick) and the Agent API get the
+same "Invalid arguments" message back. The error names the view / mode the parameter belongs to and
+what your view accepts, and nothing is charged.
+
+- **Brand-own: parameters belong to one view.** Passing a parameter that only another view uses, or
+  a value only another view accepts (e.g. `time_range="90d"` on `get_url_detail`'s rolling caliber),
+  is rejected at the schema layer. Shared parameters with per-view defaults (`time_range`,
+  `sort_order`) take the default of the view you picked.
+- **Brand-own: every input error the tool could already tell from the arguments alone** — it used to
+  come back as a charged `{error}` (or fail only after the call had been metered) — is now rejected
+  at the schema layer with the same message:
+  - custom windows: `time_range="custom"` without the dates it needs, impossible dates, reversed
+    ranges, a `start_date` in the future (`get_verdict`), spans over the tool's limit (90 days on
+    `get_brand_search_queries`; 366 days on `query_analytics` and on the explicit
+    `start_date`+`end_date` of `get_prompt_list` view=`table` / `list_prompt_records` /
+    `get_prompt_citations`, which also need both dates or neither) — on `get_brand_overview`,
+    `get_brand_board`, `list_brand_answers` view=`table`, `get_prompt_detail`, `get_traffic_data`,
+    `get_verdict`, `get_brand_search_queries`, `query_analytics`, **`get_topic_analytics`**
+    (`time_range="custom"` needs `start_date`; `end_date` stays optional = up to today — it used to
+    fall back silently to the last 30 days, return all zeros for a reversed window, roll
+    2026-02-30 into March, or fail with "Invalid time value" after the call was metered for
+    `2026/09/01` or a whitespace-only `end_date`. What the tool accepted before still works: an empty
+    `end_date` ("") still means up to today and whitespace around a date is still ignored) and the
+    three tools above;
+  - an explicit window given backwards on `get_url_detail` `window_caliber="rolling"`
+    (`start_date` after `end_date` — or a future `start_date` with `end_date` omitted, which means now —
+    used to return 0 references and charge; an unparseable date string is still treated as not
+    given, as documented);
+  - required ids that are empty or blank (`prompt_id` on `get_prompt_detail` / `list_prompt_records`
+    / `get_prompt_citations`, `record_id`, `domain` on `get_domain_detail`, `url` on
+    `get_url_detail`, `audit_id`, and `prompt_id` on the write tools `trigger_prompt` /
+    `archive_prompt`) — they used to come back as a floor-charged "not found"; surrounding
+    whitespace is trimmed; and non-integer paging (`limit` / `offset` on `get_prompt_citations`,
+    `limit_recent` on `get_url_detail`);
+  - blank filter values (`country: " "`, `platform: " "`, `tags: [" "]`, `entity_id: " "`) on
+    `get_brand_board`, `list_brand_answers` and `query_analytics`;
+  - `query_analytics` combinations the dataset does not support: its dimensions / metrics,
+    `topic_id` / `topic_name` / `domain` / `topic_ids` / `country` / `prompt_text_include` /
+    `prompt_text_exclude` on a dataset that does not take them, `topic_domain_citations_daily`
+    without (or with a blank) `domain`;
+  - `get_brand_search_queries`: a platform that exposes no search queries (anything but chatgpt /
+    perplexity), `mode="prompt_queries"` without `prompt_id`, `mode="query_detail"` without
+    `normalized_query`;
+  - platform codes outside the supported list on `get_sentiment_dashboard` /
+    `get_competitor_cooccurrence`; more than 50 topics after `topic_id` is merged into `topic_ids`
+    on `get_prompt_list` view=`mention_rates`;
+  - write tools: `update_prompt_tags` without the parameters its `action` needs, `create_prompt`
+    with an invalid `country`, `create_competitor` with a name that has no recognisable characters
+    (`invalid_name`) or a `domains[0]` that is not a registrable website (`invalid_domain` /
+    `platform_domain`).
+- **Brand-own: argument errors only the database can see are refunded, not charged.** A
+  `topic_ids` / `country` / `entity_id` / `aspect_id` that does not belong to your brand, a
+  `topic_id` outside it on `create_prompt`, or a platform code that does not exist still comes back
+  as `{ error }` (it takes a lookup to know), but the call is refunded in full — the receipt shows a
+  failure, not a floor charge.
+- **Public:** besides the per-tool strict checks that always existed, the schema now rejects:
+  - a parameter the chosen view / mode never reads (it used to be silently ignored and the call
+    still charged) — e.g. `get_public_brand` view=`rank_citation` with `page_size` / `quadrant` /
+    `snapshot_key` / `page` (rows-only), view=`perception` with `aspect` (drill-down only) or
+    `perception_mentions` with `min_mentions_per_aspect`, facet views with `include_trend` / `days`
+    (visibility only), `product_space_id` (single-brand footprint only) or `limit` (list facets
+    only); `get_public_topic` view=`commerce` with a window, view=`difficulty` with a locale outside
+    the whole-category form; `get_public_category` view=`topics` with `topic_ids`,
+    view=`recent_mentions` with a window, `slug` on a view other than `overview`, `offset` on a view
+    other than `brand_leaderboard` (those views do not page — on an empty result `offset>0` only
+    swapped the availableLocales / availablePlatforms hints for a misleading `endOfList` marker);
+    `get_public_search_queries` parameters of another mode (e.g. `search` on `territories`,
+    `country` on `theme_detail`);
+    `get_public_shopping_product_detail` mode=`full` with `product_space_id`;
+    `get_public_coverage` view=`platforms` parameters of another scope. The error names the views /
+    modes that do accept the parameter.
+  - a missing required parameter that the tool used to report as a charged `{error}` — e.g.
+    `perception_mentions` without `aspect`, a `brand_ids` comparison without `country`/`language`,
+    topic `overview` without `topic_id`/`slug`, `difficulty` without an id, category views without
+    `slug` / `product_space_id`, search modes without `product_space_id` / `topic_id` / `query`,
+    card mode without `product_space_id`, `locales` without `entity_id`, `platforms` scopes without
+    their id;
+  - invalid explicit windows (`date_from` without `date_to`, impossible dates, reversed ranges) and
+    `citation_totals` with `range=all`;
+  - single end dates that are not a real calendar day: `get_category_brand_momentum` `date_to`
+    (2026-02-30 used to fail after the call was metered; it must now also be written YYYY-MM-DD —
+    the old 10-character check let PostgreSQL parse other spellings such as `2026/09/01`, which are
+    now rejected before execution) and `to` on
+    `get_public_shopping_product_detail` / `get_public_coverage` view=`platforms` scope=`product`,
+    which must also not be in the future (both used to fall back silently to the rolling latest
+    window and charge). `to` must not be a future date, judged in UTC (east-of-UTC callers before
+    08:00 local: pass yesterday or omit).
+
+`get_agent_ready_scans` now accepts numeric strings (`limit: "1"`) on MCP as well — the Agent API
+already did, and every other tool accepts them on all surfaces.
+
+Still charged at the floor price (not parameter errors): genuinely "no data" results, an unknown
+id / merged entity / expired snapshot / a prompt, record or audit that does not exist, a real
+platform the brand's plan does not include ("not entitled"), a sample over the safety cap, and the
+missing-locale guidance that returns `availableLocales` (earlier owner decision).
+
+### Tool descriptions fit the client cut-off; per-view caveats live in the view parameter
+
+The first merge concatenated every old tool's description (`get_public_brand` ~12KB,
+`get_public_topic` ~11.7KB). Claude Code cuts a tool description at 2048 characters (the input
+schema is not cut; Cursor ~6500), so most views, the caveats written only in the description and
+the Cost line at the end were invisible to the model.
+
+- **Every tool description is now ≤ 2000 characters including the Cost line** (≤ 2048 with the
+  "[This token can only use …]" suffix a narrowed token adds). Structure: one sentence on what the
+  tool answers, **one line per view** (what it returns, its required / discriminating argument, its
+  window), the shared window convention once, then the generated Cost line (prices are never
+  hand-written).
+- **Nothing was dropped.** The full per-view caveats now sit in the discriminator parameter's
+  description — `view`, `mode`, `section`, `source`, `window_caliber` or `latest_per_platform`, one
+  paragraph per view (e.g. `get_public_topic` view: prompt_matrix `shareAmongColumns` is a share of
+  the top-N columns only and `values` are percentages; difficulty is a fixed 28-day cross-platform
+  window; commerce `revenueEstimate` is modeled) — and constraints of one parameter sit in that
+  parameter's description (e.g. `get_public_brand` `range` = the `window` echo fields and
+  `deniedRange`, `platform` = the one-call-per-platform recipe). **Read the view parameter before
+  quoting a view's number.** Only history notes ("since 2026-09 … was: all history", measurement
+  anecdotes) left the model-visible text; they stay in this changelog and in the references.
+- **Agent API `find_tools`:** view / mode values and the absorbed old tool names now score like
+  tool-name words, so "compare brands", "topic difficulty", "data window", "brand perception",
+  "public locales" load `get_public_brand` / `get_public_topic` / `get_public_coverage` first. This
+  scoring change does not touch the resident set.
+- **Agent API resident set (tools loaded without `find_tools`) — changed in this release**, re-picked
+  from 90 days of real usage (the list ↔ detail drill-down chain): **added** `list_prompt_records`,
+  `get_url_detail`, `get_domain_detail`, `get_verdict`; **removed** `get_competitor_polarity` and
+  `get_prompt_record_summaries` (both names are gone from the Agent API — the hidden pre-0.7.0
+  names exist on MCP only). The local geoly CLI keeps its own copy of this
+  list (`tool-catalog.ts`); CLI builds up to 0.3.3 still carry the two removed names and lack the four
+  new ones — update the CLI to the matching release so both entry points start from the same set.
+- **Agent API "timeout #N this run" prefix** counts per former tool again: the facet views of
+  `get_public_brand` are one former tool (as are the comparison views, perception / perception_mentions
+  and rank_citation / rank_citation_rows), so a second timeout across them carries "timeout #2";
+  views that used to be separate tools (e.g. `get_verdict` competitors vs sources) keep separate
+  counts.
+- No behaviour, price, schema value range, default or timeout changed.
+
+### Fixed
+- docs: `get_quota` / `_quota` `remaining` of `-1` is now documented as **unlimited** (enterprise) in the tool description, this skill and the customer guide — an agent read it as an overdrawn balance (2026-10-08).
+
+- **fixed: boards single-board calls were settled at the hold.** `list_public_shopping_products`
+  view=`boards` with `board="climbers"` or `board="entrants"` was charged the full three-board hold
+  (e.g. 30 credits for 4 rows) because the result has no `hot` list; it is now charged per row
+  actually returned, like `board="hot"` and `board="all"` (this also affected the pre-0.7.0
+  `list_public_shopping_boards`). The response shape is unchanged.
+
+### Skill text corrected
+
+- **"What costs credits" (SKILL.md) now states the per-call pricing that has applied since
+  2026-09-10** (rates v4.0): your own brand's monitoring reads cost credits per call (light 1 /
+  standard 3 / deep 10 — e.g. `get_brand_overview` 3, `get_citation_overview` board 10 / table 3,
+  `get_platform_matrix` 10). The previous text still called them free and unmetered. Audits, site
+  traffic, agent-ready scans, writes, discovery / navigation and the three public source tools stay
+  free. The Cost line at the end of every tool description is the authoritative price.
+- Tool counts: up to **53** tools per token (not 54 — the two selectors `list_organizations` +
+  `list_brands` only coexist on a multi-org token, which never carries write tools); a read-only
+  multi-org token sees 47.
+
 ## 0.6.1
 
 Fixes and one behaviour change shipped after 0.6.0.

@@ -1,16 +1,16 @@
 ---
 name: geoly-mcp
-description: "Use when querying or reporting on AI brand visibility through GEOly — via the geoly CLI (geoly run / geoly call) or the GEOly MCP server: routing a question to the right entry point, following the org/brand discovery flow, quoting the correct KPI caliber, and avoiding metric-definition pitfalls. Triggers: GEOly; geoly CLI; GEO / AI-visibility reporting; citation rate, mention rate, AIGVR, Share of Model; daily trends; competitor, category whitespace, brand momentum; any call to get_brand_overview / query_analytics / get_prompt_* / get_citation_* / compare_public_brands / get_category_* / get_public_* tools."
+description: "Use when querying or reporting on AI brand visibility through GEOly — via the geoly CLI (geoly run / geoly call) or the GEOly MCP server: routing a question to the right entry point, following the org/brand discovery flow, quoting the correct KPI caliber, and avoiding metric-definition pitfalls. Triggers: GEOly; geoly CLI; GEO / AI-visibility reporting; citation rate, mention rate, AIGVR, Share of Model; daily trends; competitor, category whitespace, brand momentum; any call to get_brand_overview / query_analytics / get_prompt_* / get_citation_* / get_category_* / get_public_* tools."
 metadata:
   author: geoly
-  version: "0.6.1"
+  version: "0.7.0"
 ---
 
 # GEOly MCP
 
 [GEOly](https://www.geoly.ai) tracks how brands are mentioned and cited across AI engines (ChatGPT,
-Perplexity, Google AI Mode, Google AI Overview, Gemini, Copilot). The MCP server exposes **up to 80 tools** (the exact set depends
-on plan, mode, and write grants) across two surfaces:
+Perplexity, Google AI Mode, Google AI Overview, Gemini, Copilot). The MCP server exposes **up to 53 tools** (the exact set depends
+on plan, mode, and write grants; a read-only multi-org connection sees 47) across two surfaces:
 
 - **Self / brand-own** — the customer's own monitoring, audits, GA4, and write actions.
 - **Public / industry** — cross-brand competitive intelligence (Grow tier and above).
@@ -142,7 +142,7 @@ citationRate share one daily denominator, so they always have identical date cov
 
 **4. Verify the caliber before you quote a number.**
 mention ≠ citation; AIGVR ≠ Share of Model; record-rate ≠ URL counts; the competitor tool
-(`get_platform_matrix`; `get_competitor_overview` is its deprecated predecessor, same query) is record-weighted, never the headline. If
+(`get_platform_matrix` `dimension=competitor`) is record-weighted, never the headline. If
 two numbers disagree, it is almost always a caliber/window/platform mismatch — reconcile, don't
 guess.
 
@@ -156,7 +156,7 @@ them have data in the last 30 days, topic ids plus the filter universe (countrie
 tracked competitors on the **entity caliber** (the brand library — same rows as
 `get_competitor_list status="tracked"`, own brand excluded), the data window and remaining
 credits — so you do not spend separate calls on `get_current_date`, `get_topic_list` or
-`get_available_platforms` afterwards; `get_competitor_list` is still the tool for suggestions,
+`get_public_coverage` view=`platforms` (scope=brand) afterwards; `get_competitor_list` is still the tool for suggestions,
 removed brands and learned spellings.
 
 **6. Recover from errors, don't loop.**
@@ -167,7 +167,8 @@ public/report tools) and paginate (`currentPage == totalPages`) instead of assum
 
 ## Connection & access (what affects your calls)
 
-- **Auth**: the client connects to `https://app.geoly.ai/api/mcp` (URL only) and authorizes via
+- **Auth**: the client connects to `https://app.geoly.ai/api/mcp/v1` (URL only; `/api/mcp` is the
+  same v1 endpoint, kept for existing configs) and authorizes via
   OAuth in the browser on first use — the user picks the org and read/write scope on the consent
   screen. The authorization maps to a user and the orgs they can access. A legacy read-only
   `Authorization: Bearer geom_…` static token is still accepted for headless/CI. You may pin a
@@ -185,19 +186,25 @@ public/report tools) and paginate (`currentPage == totalPages`) instead of assum
     brand + org (+ profile fields, GA4/Cloudflare readiness) + today + first-run state + platforms
     (entitled ones included, even at 0 records) + topics + scope filters + entity-layer tracked
     competitors + data window + credits.
-- **Public discovery flow** (any cross-brand / `get_public_*` work): **① `get_public_data_window`
-  (free)** → the "as of" anchor: public collection is a weekly batch and every public page windows
+- **Public discovery flow** (any cross-brand / `get_public_*` work): **① `get_public_coverage`
+  view=`data_window` (free)** → the "as of" anchor: public collection is a weekly batch and every public page windows
   its figures as "latest PUBLISHED batch day, back 30/60/90 days"; since 2026-09 the windowed
   public tools default to that 30d window (was: all history) and echo `window` in every response —
   keep all calls on one `range` and quote `window.from`–`window.to`. ② `search_public_entities` →
-  ids/slugs. ③ `list_public_locales` / `get_available_platforms` → a valid locale/platform.
-  ④ the typed data tool. Details: references/public-tools.md § Time window convention.
+  ids/slugs. ③ `get_public_coverage` view=`locales` / view=`platforms` → a valid locale/platform.
+  ④ the typed data tool (0.7.0: related public tools are **views** of one tool — `get_public_topic`,
+  `get_public_brand` (incl. `brand_ids` comparison, perception, AIO rank×citation),
+  `list_public_shopping_products` (incl. view=`boards`); old names unlisted — hidden, callable until 2026-11-30 and then removed; use the new ones — see CHANGELOG 0.7.0). Details: references/public-tools.md § Time window convention.
+- **Reading a multi-view tool** (0.7.0): its description carries one line per view; the full
+  caveats of each view (units, window exceptions, "null ≠ 0" rules) are in the description of the
+  `view` / `mode` / `section` / `source` / `window_caliber` parameter, and a parameter's own limits
+  in that parameter's description — read them before quoting a view's numbers.
 - **Subscription gate**: single-org / single-brand context returns **HTTP 402** at entry if the
   subscription is inactive. Multi-org validates **per target org at call time** and fails that
   org's tool call with an error message (not a 402).
 - **Public tools** require a **Grow-tier-or-above** plan (`grow | advanced | plus | enterprise`).
   Multi-org connections get them too, as long as **any** accessible org qualifies. If
-  `get_public_*` / `compare_public_brands` / `get_category_*` aren't available, no accessible
+  `get_public_*` / `get_category_*` aren't available, no accessible
   org has the tier or an active entitlement. (The three public **source** tools —
   `get_public_sources_overview` / `get_public_source_domain_detail` /
   `get_public_source_brand_conduit` — are NOT plan-gated and are **free**: every token has
@@ -211,54 +218,70 @@ public/report tools) and paginate (`currentPage == totalPages`) instead of assum
 - **Dates**: take them from `get_brand_context.today` (`record_date_key` is the value the daily
   tools' `date` axis uses — one day behind the Asia/Shanghai business day) before building date
   ranges; `get_current_date` remains for the clock time. `query_analytics` ranges ≤ 366 days.
-  Per-answer rows (`get_prompt_record_detail`, `list_prompt_records`,
-  `get_prompt_record_summaries`, `list_brand_answers`, `get_brand_mention_samples`, raw
+  Per-answer rows (`get_prompt_record_detail`, `list_prompt_records` (incl.
+  `latest_per_platform=true`), `list_brand_answers` (both views), raw
   `get_prompt_citations`) carry `businessDay` (UTC+8
   `YYYY-MM-DD`, the date the app shows) — quote it, not the calendar date of `recordDate`
   (stored one day early as `(D−1)T16:00Z`).
 
 ## What costs credits (and what's free)
 
-Only the **public / industry-intelligence** tools consume quota credits, and only on **Grow-tier
-or above**: the cross-brand `get_public_*`, `compare_public_brands`, `get_category_*`, and
-`get_topic_competition_difficulty` tools, plus the ranked-content listings
-`list_public_shopping_boards` and `list_public_topic_prompts` (1 credit/row). Everything else is
-**free and unmetered** (within fair-use rate limits): your own brand's monitoring, audits, GA4,
-and writes (including `trigger_prompt`), the three public source tools
-(`get_public_sources_overview` / `get_public_source_domain_detail` /
-`get_public_source_brand_conduit`), plus all discovery/navigation (`get_brand_context`, `list_organizations`,
-`list_brands`, `search_public_entities`, `list_public_topics`, `list_public_locales`,
-`get_available_platforms`, `get_public_data_window`, `get_quota`). So: **point an agent at the customer's own brand and full GEO reporting runs free**;
-credits only meter cross-brand competitive intelligence.
+Credits come from one org-wide monthly pool (`get_quota` shows what is left). **The Cost line at
+the end of every tool description is the authoritative price** — read it before looping over a tool.
 
-### Spending credits wisely (only relevant once you touch public tools)
+- **Your own brand's monitoring reads cost credits per call** (since 2026-09-10): light 1 /
+  standard 3 / deep 10 credits per call, whatever the page size — e.g. `get_brand_overview` 3,
+  `get_citation_overview` 10 with `section="board"` / 3 with `section="table"`,
+  `get_platform_matrix`, `get_topic_analytics` and `get_brand_search_queries` 10,
+  `query_analytics` 1. Several are also rate-guarded per minute.
+- **Public / industry-intelligence tools** (Grow-tier or above): the cross-brand `get_public_*` and
+  `get_category_*` tools are paid per view (e.g. `get_public_topic` view=`difficulty`: 3 per call
+  with a `topic_id`, 1 with a `prompt_id`, 10 with a `product_space_id`); the ranked-content
+  listings `list_public_shopping_products` view=`boards` and `get_public_topic` view=`prompts` cost
+  1 credit per row returned.
+- **Free:** audits (`get_audit_list` / `get_audit_detail`), site traffic (`get_traffic_data`),
+  `get_agent_ready_scans`, the writes (including `trigger_prompt`, which runs a real scrape but spends
+  no quota credits), the three public source tools (`get_public_sources_overview` /
+  `get_public_source_domain_detail` / `get_public_source_brand_conduit`), and all
+  discovery/navigation (`get_brand_context`, `get_current_date`, `resolve_page_context`,
+  `list_organizations`, `list_brands`, `get_topic_list`, `resolve_my_brand_public`,
+  `search_public_entities`, `list_public_topics`, `get_public_coverage` (all three views),
+  `get_quota`).
+
+### Spending credits wisely
 
 Credits are an org-wide monthly pool shared across all seats. To make them last **without
 shipping a shallower report**:
 
 1. **Discovery is always free — locate first, then pay to read.** Use the free
-   `get_public_data_window` (time anchor) / `search_public_entities` / `list_public_topics` /
+   `get_public_coverage` view=`data_window` (time anchor) / `search_public_entities` / `list_public_topics` /
    `get_public_search_queries` (mode `product_spaces`) to find the window and the exact
    topic/brand/space id **before** spending on content tools.
 2. **Budget at the start of a multi-tool research task.** Call `get_quota` (free) once up front;
-   if `remaining` is low, prioritise the calls that carry the conclusion.
-3. **Budget by rows returned, not by tier name.** Credits are charged **per row of data
-   returned** (1/3/10 per row by tier), so cost scales with result size, not with the tool's
-   "light/standard/deep" label. A single-object KPI (`get_public_brand` view=`visibility`) costs
-   10 — one row — while a 50-brand `leaderboard` costs 150 (50 rows × 3). Estimate a call as
-   `rows × per-row-rate`, and pass a `page_size`/`limit` no larger than you actually need (an
-   over-large request pre-holds more, refunded down to the rows actually returned).
+   if `remaining` is low, prioritise the calls that carry the conclusion. **`remaining` / `quota_limit`
+   of `-1` means unlimited (enterprise)**: usage is still recorded and shown as `cost`, but a call is
+   never rejected for lack of credits — do not budget or warn about a negative balance; the per-call
+   2500-credit cap, rate limits and circuit breakers still apply.
+3. **Budget by the Cost line, not by tier name.** Most public views are charged **per row of
+   data returned** (1/3/10 per row by tier), so their cost scales with result size, not with the
+   tool's "light/standard/deep" label. A single-object KPI (`get_public_brand` view=`visibility`)
+   costs 10 — one row — while a 50-brand `leaderboard` costs 150 (50 rows × 3). Estimate such a call
+   as `rows × per-row-rate`, and pass a `page_size`/`limit` no larger than you actually need (an
+   over-large request pre-holds more, refunded down to the rows actually returned). Own-brand
+   monitoring reads are the opposite — a flat price **per call** — so there one larger page is
+   cheaper than several small ones.
 4. **Two-stage, quality-gated.** Cheap tools (`overview` views, `1`-credit lookups) are for
    **triage/locating** — deciding what's worth a deep read. But when the answer depends on
    evidence (rankings, momentum, perception, per-prompt records, competitive standing), you
-   **must** still call the deep tool (`get_public_topic_prompt_matrix`, `compare_public_brands`,
-   `get_public_brand_perception`, `get_public_topic_prompt_detail`, `get_category_*`). Never skip a
+   **must** still call the deep tool (`get_public_topic` view=`prompt_matrix`, `get_public_brand`
+   with `brand_ids` or view=`perception`, `get_public_topic_prompt_detail`, `get_category_*`). Never skip a
    deep call *to save credits* and hand back a thinner report — tell the user credits are low
    instead. Cost-efficiency means **not wasting** calls, not **under-delivering**.
 5. **Don't blind-retry a wall.** `QUOTA_EXCEEDED` and `CIRCUIT_OPEN` are deterministic — retrying
    the identical call just fails again. Narrow the scope, switch to a cheaper tool that still
    answers, or tell the user the quota is exhausted (free tools still work). The `_quota` field on
-   every paid result (`cost`, `remaining`, `warning`) is your running budget signal. When a
+   every paid result (`cost`, `remaining`, `warning`) is your running budget signal (`remaining: -1` =
+   unlimited, never "overdrawn"). When a
    `QUOTA_EXCEEDED` says `max_affordable_limit`, retry the same tool with `page_size`/`limit` set
    to that value — a smaller page still returns everything for a small topic.
 
@@ -299,7 +322,7 @@ geoly run "<question>" --max-credits 200                      # cap the spend
   call of a script: one JSON object with the brand, today's dates, the entitled platforms and
   which have data, topic ids, the tracked competitors (entity ids + legacy ids) and remaining
   credits — feed those into the loop instead of calling `get_current_date` /
-  `get_competitor_list` / `get_available_platforms` per iteration.
+  `get_competitor_list` / `get_public_coverage` view=`platforms` per iteration.
 - `geoly schema <tool>` for exact parameters; `geoly call <tool> --help` also works.
 - `geoly call <tool> --<param> <value> ...` — flags use schema parameter names **verbatim**
   (`--brand_id`, `--time_range 30d`); arrays/objects take JSON strings; whole-object via
@@ -344,24 +367,24 @@ decide by what you have:**
 | A topic / text-defined **subset** daily series | `query_analytics` dataset=`topic_citations_daily` (+ `prompt_text_include/exclude`) |
 | Per-prompt visibility; search/list prompts (same calibers as the `/prompts` table; `summary` = the table's header bar) | `get_prompt_list` (per-prompt rate in `geoMetrics.aigvr.citationRate`; add `include_competitors=true` for SoM / competitors) |
 | One prompt's windowed overview (visibility trend, Share of Mentions, competitor board, platform matrix, source domains — the `/prompts/[id]` page) | `get_prompt_detail` (`time_range` / `platform`) |
-| Which competitors does the AI prefer **instead of** us, answer by answer (`weLose` per rival — the page's "who beats you" board; no weWin/tie any more) | `get_competitor_polarity` |
-| Which cited sites ride along with **negative** aspect judgments of us (Verdict › Sources tab: `kind`, `citedRecords`, `negativeShare`) | `get_risk_context_sources` |
+| Which competitors does the AI prefer **instead of** us, answer by answer (`weLose` per rival — the page's "who beats you" board; no weWin/tie any more) | `get_verdict` `view="competitors"` |
+| Which cited sites ride along with **negative** aspect judgments of us (Verdict › Sources tab: `kind`, `citedRecords`, `negativeShare`) | `get_verdict` `view="sources"` (default 7d — the page shows 30d) |
 | A prompt's **full execution history** over a range (per-day records, e.g. 30-day shopping-card trend) | `list_prompt_records` (explicit `start_date`/`end_date` are UTC+8 business days) |
 | **Read the actual answers** brand-wide — every AI answer in the window, filtered by topic / tag / country / platform / "mentions entity X" / "mentions us", paginated (= in-app /performance/answers) | `list_brand_answers` (`answerSummary` + `entities[]` + `sources[]` per row; drill one row with `get_prompt_record_detail`) |
 | The actual **citation URLs / sources** for a prompt | `get_prompt_citations` (`deduplicate=true` for a source list) |
-| "Which queries never mention us" (blind spots) | `get_prompt_mention_rates` |
+| "Which queries never mention us" (blind spots) | `get_prompt_list` `view="mention_rates"` (worst first by default) |
 | Citation **domain distribution / ownership** | `get_citation_overview` (counts URLs, not records; window = N whole +08 calendar days + today on the citation-creation axis — read `caliber` + `window` from the response) |
-| One domain / one page deep-dive | `get_domain_detail` (the `/sources/citations/<root_domain>` drill-down) / `get_page_detail` (same `caliber` + `window` contract; both return `share` raw 0–1, shown with one decimal — but `get_page_detail` is **not** the pages-tab row: lookup-URL grain and a denominator that keeps redirect links) / `get_url_reference_detail` (tool-only: lookup-URL grain + rolling window, adds ChatGPT search sources — not a page row) |
-| The cited-domain table: per-domain delta, mentioned brands, "mentions you", search / sort / paging | `list_citation_domains` (same read model as the page) |
-| Content gaps (competitor cited there, you not) | `list_citation_domains` with `gap_only=true` (`get_content_opportunities` is deprecated — old semantics, not the page) |
-| Standing **vs competitors** | `get_brand_board` (**entity caliber** — unfiltered it *is* the in-app /performance board: confirmed competitors, `visibility` = mentioned ÷ completed answers, same formula for you; `include_trend=true` for the page's daily chart — **not one point per day**: check `trendLatestDay` (yesterday is often still uncounted) and `trendTruncated` (long windows keep the newest days only). Adding `topic_ids`/`country` switches to `caliber=scoped_open_world_v0`: same row source as the page's filtered board but **different numbers** — the page still shows the legacy merged board there, fail-closed) · `get_platform_matrix` `dimension=competitor` (legacy discovered-brand record-weighted — not headline; `get_competitor_overview` is its deprecated alias, same shape) |
-| How AI *describes* the brand (verbatim) | `get_brand_mention_samples`; vs rivals → `get_competitor_cooccurrence` |
+| One domain / one page deep-dive | `get_domain_detail` (the `/sources/citations/<root_domain>` drill-down) / `get_url_detail` — pick the caliber: `window_caliber="page"` (same `caliber` + `window` contract as the domain drill-down; `share` raw 0–1, shown with one decimal — but **not** the pages-tab row: lookup-URL grain and a denominator that keeps redirect links) or `window_caliber="rolling"` (default; tool-only: lookup-URL grain + rolling or custom `[start_date, end_date)` window, adds ChatGPT search sources and `prompt_id` filter — not a page row) |
+| The cited-domain table: per-domain delta, mentioned brands, "mentions you", search / sort / paging | `get_citation_overview` `section="table"` (same read model as the page) |
+| Content gaps (competitor cited there, you not) | `get_citation_overview` `section="table"`, `gap_only=true` (domains, the page caliber; for one domain's prompts use `get_domain_detail` `prompts[]`) |
+| Standing **vs competitors** | `get_brand_board` (**entity caliber** — unfiltered it *is* the in-app /performance board: confirmed competitors, `visibility` = mentioned ÷ completed answers, same formula for you; `include_trend=true` for the page's daily chart — **not one point per day**: check `trendLatestDay` (yesterday is often still uncounted) and `trendTruncated` (long windows keep the newest days only). Adding `topic_ids`/`country` switches to `caliber=scoped_open_world_v0`: same row source as the page's filtered board but **different numbers** — the page still shows the legacy merged board there, fail-closed) · `get_platform_matrix` `dimension=competitor` (legacy discovered-brand record-weighted — not headline) |
+| How AI *describes* the brand (verbatim) | `list_brand_answers` `view="mention_samples"`; vs rivals → `get_competitor_cooccurrence` |
 | Topic-level analysis | `get_topic_list` (ids, free) → `get_topic_analytics` (pass `topic_ids`) or `query_analytics` `topic_citations_daily` for day-level topic trends |
-| Sentiment (brand-wide distribution / daily trend / per platform — no verbatim highlights, use `get_brand_mention_samples` for those) | `get_sentiment_dashboard` |
+| Sentiment (brand-wide distribution / daily trend / per platform — no verbatim highlights, use `list_brand_answers` `view="mention_samples"` for those) | `get_sentiment_dashboard` |
 | The brand library (own brand + tracked competitors + system suggestions + removed), same rows as Settings › Brand | `get_competitor_list` (competitors = `status="tracked"` and `is_own_brand=false`) |
-| Site AI-readiness audit | `get_audit_list` → `get_audit_detail` (the report header + single-page checks + fix copy in `checksMeta`) → `get_audit_pages` for a site audit's per-page results / `fetch_quality=unusable` pages |
-| Traffic (if GA4 connected) | `get_ga4_traffic_data` (add `page_path` for one page). Whole-site vs AI-referred fields live in the same payload — see the catalog row before quoting a number; the page opens on 7d, the tool defaults to 30d |
-| AI crawlers hitting the site (if Cloudflare connected) | `get_cf_traffic_data` — bots fetching pages, **not** visitors arriving from AI answers (that is `get_ga4_traffic_data`). Two calibers to keep straight: `changes.blockedEvents` is always `null` (never computed), and `blockedEvents[]` is capped at 50 rows (`blocked_events_limit`) — quote per-crawler block counts from the uncapped `blockedCrawlerSummary` |
+| Site AI-readiness audit | `get_audit_list` → `get_audit_detail` (the report header + single-page checks + fix copy in `checksMeta`) → `get_audit_detail` `section="pages"` for a site audit's per-page results / `fetch_quality=unusable` pages |
+| Traffic (if GA4 connected) | `get_traffic_data` `source="ga4"` (add `page_path` for one page). Whole-site vs AI-referred fields live in the same payload — see the catalog row before quoting a number; the page opens on 7d, the tool defaults to 30d |
+| AI crawlers hitting the site (if Cloudflare connected) | `get_traffic_data` `source="cloudflare"` — bots fetching pages, **not** visitors arriving from AI answers (that is `source="ga4"`). Two calibers to keep straight: `changes.blockedEvents` is always `null` (never computed), and `blockedEvents[]` is capped at 50 rows (`blocked_events_limit`) — quote per-crawler block counts from the uncapped `blockedCrawlerSummary` |
 | Archived prompts — list them | `get_prompt_list status=archived` (the /prompts Archived tab; no separate read tool). `get_prompt_detail` / `get_prompt_record_detail` work on archived prompts by id |
 | Archive / restore a prompt | `archive_prompt` (write grant; `restore=true` to bring it back; idempotent). Archived prompts refuse `trigger_prompt` until restored |
 | Tag prompts in bulk / rename a tag | `update_prompt_tags` (write grant): `action=add\|remove` with `prompt_ids` + `tags`; `action=rename` with `old_name` + `new_name` |
@@ -386,32 +409,34 @@ decide by what you have:**
 ### Public / industry (Grow tier and above)
 | You want… | Use |
 |---|---|
-| The "as of" date + 30/60/90d windows the public pages use (call first; free) | `get_public_data_window` |
+| The "as of" date + 30/60/90d windows the public pages use (call first; free) | `get_public_coverage` view=`data_window` |
+| Valid locales / platforms for an entity or scope (free) | `get_public_coverage` view=`locales` / `platforms` |
 | Resolve a brand/category/topic name → IDs | `search_public_entities` |
 | Category leaderboard / who leads | `get_public_category` view=`brand_leaderboard` |
 | Where to invest (winnable topics) | `get_category_whitespace` |
 | Who's gaining/losing share | `get_category_brand_momentum` |
 | What AI is being asked in our space | `get_public_search_queries` mode=`territories` → same tool, mode=`query_detail` |
 | Which brand OWNS each cross-topic demand root | `get_public_search_queries` mode=`territories` |
-| Cross-category **AI shelf leaderboard** (hot / climbers / entrants, week-over-week) | `list_public_shopping_boards` |
-| One category's AI shelf (latest batch vs previous, channels, price tiers) | `list_public_shopping_products` |
+| Cross-category **AI shelf leaderboard** (hot / climbers / entrants, week-over-week) | `list_public_shopping_products` view=`boards` |
+| One category's AI shelf (latest batch vs previous, channels, price tiers) | `list_public_shopping_products` (view=`products`, default) |
 | One product's full AI analysis (shelves, trend, rivals, channels) | `get_public_shopping_product_detail` (mode=`card` for a cheap preview) |
-| Compare 2–4 brands head-to-head | `compare_public_brands` (country+language **required**) |
-| How AI perceives a brand | `get_public_brand_perception` → same tool, mode=`aspect_mentions` |
-| Does Google ranking convert into AI Overview citations (AIO only) | `get_public_brand_rank_citation` (board → rows) |
-| Is a topic worth targeting | `get_topic_competition_difficulty` |
+| One topic: overview, leaderboard, SoM trend, prompt matrix, every prompt, citation domains, commerce | `get_public_topic` view=`overview` / `brand_leaderboard` / `som_trend` / `prompt_matrix` / `prompts` / `citation_domains` / `commerce` |
+| Compare 2–4 brands head-to-head | `get_public_brand` with `brand_ids` + `view` (e.g. `visibility`; country+language **required**) |
+| How AI perceives a brand | `get_public_brand` view=`perception` → view=`perception_mentions` |
+| Does Google ranking convert into AI Overview citations (AIO only) | `get_public_brand` view=`rank_citation` → view=`rank_citation_rows` |
+| Is a topic worth targeting | `get_public_topic` view=`difficulty` |
 | Bridge my brand → public dataset | `resolve_my_brand_public` (`bestMatch` = the in-app industry-profile decision; `ambiguous=true` means the app refuses to pick — do not guess from `candidates`) |
 
 Cross-ref rule: for record counts/rates use `get_brand_overview` (not `get_citation_overview`,
 which counts URLs); for trends use `query_analytics` dataset=`brand_citations_daily` (not by
 paginating citations).
-Window rule for the three citation tools (`get_citation_overview` / `get_domain_detail` /
-`get_page_detail`): their `time_range` is **N whole Asia/Shanghai calendar days on the
+Window rule for the page-window citation tools (`get_citation_overview` / `get_domain_detail` /
+`get_url_detail window_caliber="page"`): their `time_range` is **N whole Asia/Shanghai calendar days on the
 citation-creation axis plus today** (matches the /sources/citations page), not the rolling
 `now − N×24h` preset window of `get_brand_overview` (whose `custom` range is instead an exact
 +08 business-day span, echoed as full ISO instants) — never subtract one from the other; quote the
-`window` each response returns. Their `platform` (and `list_citation_domains` /
-`get_url_reference_detail`) must be `all` or an **active** platform the brand is entitled to
+`window` each response returns. Their `platform` (and `get_url_detail`'s rolling caliber)
+must be `all` or an **active** platform the brand is entitled to
 (exactly the page's platform chips) — an unknown, un-entitled or retired code (e.g. a
 `claude` / `grok` entry left in an old entitlement list) returns `{ error }` listing the
 allowed codes, never a silent fall-back to all. Shares: the page shows one decimal — format
@@ -419,13 +444,16 @@ the raw `share` (0–1) fields; integer `percentage` / `ownership` points cannot
 into the page's number. `caliber="legacy"` means the derived layer was unavailable and
 the old query ran instead — its `window` then differs by tool: `get_citation_overview` reports
 `startDay..endDay` **business days (+08)** on `prompt_record.record_date` (the old predicate is
-day-granular, not an instant); `get_domain_detail` / `get_page_detail` report an exact
+day-granular, not an instant); `get_domain_detail` / `get_url_detail` (page caliber) report an exact
 `start..end` instant pair on citation `created_at` (rolling N×24h). Quote whichever you got.
 
-> Deprecated aliases (`get_competitor_overview`, `get_brand_citations_daily`, `get_ga4_page_data`,
-> `get_public_brand_perception_aspect_mentions`, `get_public_search_query_detail`,
-> `get_public_shopping_card_detail`) are still registered and forward to the tools above — do not
-> pick them for new work; see tools-catalog § Deprecated for the equivalent call.
+> No deprecated aliases are listed (0.7.0): the brand-own and public old names — including the
+> 0.6.x forwarding aliases — left `tools/list`. `/api/mcp/v1` (also served at `/api/mcp`) is MCP v1
+> (`GEOly-MCP-Version: 1`); the 34 old names are not part of v1: they stay hidden and callable until 2026-11-30 and are then
+> removed (the three non-drop-in ones — `get_competitor_overview`, `get_brand_citations_daily`,
+> `get_content_opportunities` — already only return a free `TOOL_REMOVED` notice); always call the
+> new names. Old → new: tools-catalog § Pre-0.7.0 brand-own names and § Pre-0.7.0 public names
+> (also CHANGELOG 0.7.0 § Versioning).
 
 ## Recipes
 
