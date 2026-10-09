@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit",
     "verify:run": "node --import tsx scripts/verify-run.mts",
     "verify:timeout": "node --import tsx scripts/verify-timeout.mts",
+    "verify:tool-surface": "node --import tsx scripts/verify-tool-surface.mts",
     "preview:chat": "node --import tsx scripts/preview-chat.mts",
     "skill:bundle": "node scripts/gen-skill-bundle.mjs",
     "verify:retry": "tsx scripts/verify-retry.mts",

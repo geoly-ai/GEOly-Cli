@@ -1,7 +1,9 @@
 /**
  * Run context: everything a command needs, resolved once from flags + env.
  * Endpoint override is allow-listed (HTTPS *.geoly.ai, plus localhost for
- * development) so a hostile env var can't redirect tokens elsewhere.
+ * development) so a hostile env var can't redirect tokens elsewhere. The guard is on the
+ * host only: any path is accepted, so `/api/mcp/v1` (the default), the unversioned `/api/mcp`
+ * and a future `/api/mcp/v<n>` all pass.
  */
 import { readSettings } from './config.js';
 import { GeolyError } from './errors.js';
@@ -60,7 +62,11 @@ const DEFAULT_TIMEOUT_S = 30;
 /** Upper bound for an explicit `--timeout`; also caps a server-derived tool deadline. */
 export const MAX_TIMEOUT_S = 300;
 
-/** Validate an endpoint override against the allowlist. */
+/**
+ * Resolve the MCP endpoint: GEOLY_MCP_ENDPOINT when set (host allow-listed, path free), else
+ * DEFAULT_ENDPOINT. Nothing under ~/.geoly stores an endpoint, so there is no saved value that
+ * could pin an old path — only an explicit env override keeps `/api/mcp`, which still works.
+ */
 function resolveEndpoint(): string {
   const raw = process.env.GEOLY_MCP_ENDPOINT?.trim();
   if (!raw) return DEFAULT_ENDPOINT;

@@ -21,6 +21,7 @@ import { GeolyError } from './errors.js';
 import { McpClient, ToolInfo, WRITE_TOOLS, unwrapToolResult } from './mcp.js';
 import { FETCH_TOOL, fetchPage } from './fetcher.js';
 import { applyRemember, memoryBlock, readNotes } from './memory.js';
+import { REMOVED_TOOLS, isToolNotFoundError, removedToolAdvice } from './removed-tools.js';
 import {
   CORE_TOOL_NAMES,
   type CatalogEntry,
@@ -504,7 +505,7 @@ export class AgentSession {
         if (call.name === 'update_plan' && !result.failed) {
           yield { type: 'plan', items: this.workspace.currentPlan };
         }
-        if (call.name === 'find_tools' && this.lastLoaded.length > 0) {
+        if (this.lastLoaded.length > 0) {
           yield { type: 'tools_loaded', names: this.lastLoaded };
           this.lastLoaded = [];
         }
@@ -651,23 +652,64 @@ export class AgentSession {
       name: t.name,
       description: t.description ?? '',
     }));
+    // 查询里直接写了 0.7.0 之前的旧工具名（模型的旧记忆、旧技能、续跑的旧对话）：先说清它并进了哪个
+    // 工具、怎么调；searchCatalog 已按旧名给新入口加权，新入口会排在命中的第一位。
+    //（服务端 MCP v1 仍隐藏接受旧名，但本地 agent 只用列出的工具，这里只负责引导到新名。）
+    const notes = this.removedNamesIn(query).map((old) => this.removedToolText(old));
     const matches = searchCatalog(catalog, query, this.active);
     if (matches.length === 0) {
+      if (notes.length) return notes.join('\n');
       return `no unloaded tool matches "${query}". The tools already in your list may be the right ones.`;
     }
     const room = TOOL_LOAD_LIMIT - this.loadedCount;
     if (room <= 0) {
-      return `tool budget is full (${TOOL_LOAD_LIMIT} extra tools loaded this session); work with what you have.`;
+      return [
+        ...notes,
+        `tool budget is full (${TOOL_LOAD_LIMIT} extra tools loaded this session); work with what you have.`,
+      ].join('\n');
     }
     const taken = matches.slice(0, room);
     for (const m of taken) {
       this.active.add(m.name);
       this.loadedCount += 1;
     }
-    this.lastLoaded = taken.map((m) => m.name);
-    return taken
-      .map((m) => `${m.name} — ${m.description.slice(0, 200)}`)
-      .join('\n');
+    // 累加而不是覆盖：旧名说明可能已经在这一步装进了新入口，界面要一起报出来。
+    this.lastLoaded = [...this.lastLoaded, ...taken.map((m) => m.name)];
+    return [...notes, ...taken.map((m) => `${m.name} — ${m.description.slice(0, 200)}`)].join('\n');
+  }
+
+  /** 查询词里出现的 0.7.0 之前旧工具名（且服务端的工具列表里确实没有它）。 */
+  private removedNamesIn(query: string): string[] {
+    const listed = new Set(this.catalog.map((t) => t.name));
+    const words = query.toLowerCase().split(/[^a-z0-9_]+/);
+    return [...new Set(words)].filter(
+      (w) => Object.prototype.hasOwnProperty.call(REMOVED_TOOLS, w) && !listed.has(w),
+    );
+  }
+
+  /**
+   * 一个 0.7.0 之前旧名的说明：并进了哪个工具、新调用写法（函数调用形式），并把新入口装进工具面
+   * （与 find_tools 同一份额度）——光说「改用 X」而 X 不在工具面上，模型还得多搜一轮。
+   *
+   * `catalogIsCurrent=false`：会话的工具目录是部署前拿的旧列表（服务端刚回了 not found），
+   * 这时不能拿它判断「新入口你也没有」，只给改写法。
+   */
+  private removedToolText(name: string, catalogIsCurrent = true): string {
+    const listed = new Set(this.catalog.map((t) => t.name));
+    const advice = removedToolAdvice(name, 'fn', catalogIsCurrent ? listed : undefined);
+    if (!advice) return `unknown tool ${name}`;
+    let loaded = '';
+    if (listed.has(advice.replacement)) {
+      if (this.active.has(advice.replacement)) {
+        loaded = ` ${advice.replacement} is already in your tool list.`;
+      } else if (canLoadMore(this.loadedCount)) {
+        this.active.add(advice.replacement);
+        this.loadedCount += 1;
+        this.lastLoaded = [...this.lastLoaded, advice.replacement];
+        loaded = ` ${advice.replacement} is now in your tool list.`;
+      }
+    }
+    return `${advice.message}. ${advice.hint}${loaded}`;
   }
 
   /**
@@ -712,6 +754,13 @@ export class AgentSession {
         failed: false,
       };
     }
+    // 0.7.0 之前的旧工具名（2026-09-29 合并后不再列出；服务端 MCP v1 仍隐藏可调、不维护）且不在
+    // 本会话的工具列表里：本地 agent 只调列出的工具，直接告诉模型它并进了哪个工具、新写法，并把
+    // 新入口装进工具面，让模型改用新名。
+    const isRemoved = Object.prototype.hasOwnProperty.call(REMOVED_TOOLS, call.name);
+    if (isRemoved && !this.catalog.some((t) => t.name === call.name)) {
+      return { text: `error: ${this.removedToolText(call.name)}`, failed: true };
+    }
     try {
       let writeApproved = false;
       if (WRITE_TOOLS.has(call.name)) {
@@ -728,6 +777,10 @@ export class AgentSession {
       return { text: serializeResult(unwrapToolResult(call.name, result)), failed: false };
     } catch (err) {
       const message = err instanceof GeolyError ? err.message : (err as Error).message;
+      // 工具列表里有、服务端却回了 not found（例如该 token 本就够不到旧工具）——同样换成新写法。
+      if (isRemoved && isToolNotFoundError(message)) {
+        return { text: `error: ${this.removedToolText(call.name, false)}`, failed: true };
+      }
       return { text: `error: ${message}`, failed: true };
     }
   }

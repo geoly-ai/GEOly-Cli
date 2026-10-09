@@ -98,6 +98,10 @@ nothing failed, so the exit code is 0, but the CLI says on stderr that the answe
   7  credits exhausted — this period's credits are used up
   ```
 - **Help is plain text when piped** (`geoly --help | cat`), so agents can read it.
+- **Old tool names point to the new ones.** Tools merged away in the 2026-09-29 consolidation
+  (e.g. `get_url_reference_detail`, `compare_public_brands`) fail with exit 2 and a hint with the
+  replacement call — `geoly call get_url_detail --window_caliber rolling …`. The built-in agent
+  (`geoly`) maps them the same way.
 - **Writes need a go-ahead.** `archive_prompt`, `update_prompt_tags`, `move_prompts_to_topic`,
   `create_prompt` / `create_topic` / `create_competitor` and `trigger_prompt` (spends credits)
   only run after a `[y/N]` in a terminal or `--yes` in a script; the agent session asks the
@@ -107,7 +111,9 @@ nothing failed, so the exit code is 0, but the CLI says on stderr that the answe
   re-login hint.
 - **Skills, installed for you.** `geoly init` writes the GEOly [Agent Skill](./skills/geoly-mcp/SKILL.md)
   into every agent host it finds (`~/.claude/skills`, `~/.codex/skills`, `~/.cursor/skills`),
-  fetching the current copy from app.geoly.ai; `geoly upgrade` refreshes it.
+  fetching the current copy from app.geoly.ai; `geoly upgrade` refreshes it, and released
+  binaries bring it up to date in the background whenever app.geoly.ai publishes a newer one.
+  Offline, the copy embedded in the binary never overwrites a newer skill already installed.
 
 ## Also available: remote MCP + Skill
 
@@ -119,11 +125,15 @@ zero-install setup (Claude Desktop, Cowork, Codex, cloud agents), connect the re
   "mcpServers": {
     "geoly": {
       "type": "http",
-      "url": "https://app.geoly.ai/api/mcp"
+      "url": "https://app.geoly.ai/api/mcp/v1"
     }
   }
 }
 ```
+
+`/api/mcp/v1` is the versioned address of GEOly MCP v1; the unversioned `/api/mcp` serves the
+same thing and stays available for existing configs. A breaking change would ship as
+`/api/mcp/v2` alongside, with v1 left as is.
 
 Codex users can install the plugin (MCP + skill) from
 [geoly-ai/codex-plugins](https://github.com/geoly-ai/codex-plugins).

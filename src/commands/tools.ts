@@ -4,6 +4,7 @@ import { Ctx } from '../context.js';
 import { GeolyError } from '../errors.js';
 import { McpClient, toolAccess } from '../mcp.js';
 import { printResult, printText } from '../output.js';
+import { removedToolAdvice } from '../removed-tools.js';
 import { GeolyCommand } from './base.js';
 
 export class ToolsCommand extends GeolyCommand {
@@ -26,8 +27,10 @@ export class ToolsCommand extends GeolyCommand {
           name: t.name,
           title: firstLine(t.description),
           access: toolAccess(t.name),
-          // The server keeps retired names registered as forwarding aliases and marks them
-          // `[DEPRECATED → parent]`; agents scripting against --json should skip those.
+          // A server may keep retired names registered as forwarding aliases and mark them
+          // `[DEPRECATED → parent]`; agents scripting against --json should skip those. (The
+          // 2026-09-29 consolidation unlisted the old names instead — the server answers them as
+          // hidden names until 2026-11-30 and then removes them; see removed-tools.ts.)
           ...(isDeprecated(t.description) ? { deprecated: true } : {}),
         })),
       );
@@ -62,11 +65,7 @@ export class SchemaCommand extends GeolyCommand {
   protected async run(ctx: Ctx): Promise<number> {
     const tools = await new McpClient(ctx).listTools();
     const found = tools.find((t) => t.name === this.tool);
-    if (!found) {
-      throw new GeolyError('usage_error', `Unknown tool "${this.tool}"`, {
-        hint: suggest(this.tool, tools.map((t) => t.name)),
-      });
-    }
+    if (!found) throw unknownToolError(this.tool, tools.map((t) => t.name));
     printResult(ctx, {
       name: found.name,
       access: toolAccess(found.name),
@@ -79,6 +78,19 @@ export class SchemaCommand extends GeolyCommand {
 
 function firstLine(text?: string): string {
   return (text ?? '').split('\n')[0]?.slice(0, 100) ?? '';
+}
+
+/**
+ * The usage error for a name the server does not list. A pre-0.7.0 name unlisted by the 2026-09-29
+ * consolidation (removed-tools.ts) says which tool absorbed it and how to call that instead —
+ * that table wins over the typo guess, which would otherwise offer a near-miss old name's
+ * siblings. Anything else gets the nearest-name suggestion as before. `names` = this token's tool
+ * list, when known (it lets the hint flag a replacement the token does not have either).
+ */
+export function unknownToolError(input: string, names?: string[]): GeolyError {
+  const removed = removedToolAdvice(input, 'cli', names ? new Set(names) : undefined);
+  if (removed) return new GeolyError('usage_error', removed.message, { hint: removed.hint });
+  return new GeolyError('usage_error', `Unknown tool "${input}"`, { hint: suggest(input, names ?? []) });
 }
 
 /** Small typo helper: nearest names by shared-prefix/substring heuristic. */

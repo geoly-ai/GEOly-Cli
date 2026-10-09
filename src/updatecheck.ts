@@ -6,7 +6,9 @@
  *   works for scripts and agent hosts too, not just terminals. The next interactive run prints
  *   one line about what it installed.
  * - Auto-update off (`GEOLY_NO_AUTO_UPDATE=1`, CI, dev checkout): the old TTY-only notice.
- * - Skill freshness in agent hosts stays a TTY nudge either way (1.5s budget).
+ * - Skill freshness in agent hosts: the background child refreshes hosts that are behind itself
+ *   (see `backgroundUpdate` in commands/upgrade.ts); without auto-update it stays a TTY nudge
+ *   (1.5s budget).
  */
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -19,7 +21,7 @@ import {
   takeAutoUpdateMarker,
 } from './selfupdate.js';
 import { SKILL_NAME, hostsWithSkill, installedVersion } from './skills.js';
-import { DEFAULT_ENDPOINT, VERSION, resolveManifestUrl } from './version.js';
+import { DEFAULT_ENDPOINT, VERSION, isNewer, resolveManifestUrl } from './version.js';
 
 const CHECK_INTERVAL_MS = 24 * 3600 * 1000;
 
@@ -49,7 +51,12 @@ export async function maybeNotifyUpdate(): Promise<void> {
     fs.writeFileSync(LAST_UPDATE_CHECK_PATH, String(Date.now()));
     const autoStarted = !autoOff && spawnBackgroundUpdate();
     if (!tty) return;
-    const [binary, skill] = await Promise.all([autoStarted ? undefined : checkBinary(), checkSkill()]);
+    // The background child brings stale host skills up to date on its own — a nudge to run
+    // `geoly init` for something already being refreshed would only be noise.
+    const [binary, skill] = await Promise.all([
+      autoStarted ? undefined : checkBinary(),
+      autoStarted ? undefined : checkSkill(),
+    ]);
     if (binary) process.stderr.write(`${binary}\n`);
     if (skill) process.stderr.write(`${skill}\n`);
   } catch {
@@ -69,8 +76,9 @@ async function checkBinary(): Promise<string | undefined> {
 
 /**
  * The skill installed into agent hosts is a copy; the app publishes the current one. Once a
- * day, compare and nudge — never rewrite a host's files behind the user's back (that is what
- * `geoly init` / `geoly upgrade` are for).
+ * day, compare and nudge. Only used when no background update was started (auto-update off —
+ * dev checkouts, CI, `GEOLY_NO_AUTO_UPDATE=1` — or the spawn failed): then nothing rewrites a
+ * host's files on its own, so the user is told to run `geoly init` / `geoly upgrade`.
  */
 async function checkSkill(): Promise<string | undefined> {
   const hosts = hostsWithSkill();
@@ -88,13 +96,5 @@ async function checkSkill(): Promise<string | undefined> {
   return `geoly: skill ${live.version} is available for ${stale.map((h) => h.label).join(', ')} — run \`geoly init\` to refresh`;
 }
 
-/** Compare dotted versions numerically segment by segment. */
-export function isNewer(candidate: string, current: string): boolean {
-  const a = candidate.split('.').map((p) => parseInt(p, 10) || 0);
-  const b = current.split('.').map((p) => parseInt(p, 10) || 0);
-  for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
-    const diff = (a[i] ?? 0) - (b[i] ?? 0);
-    if (diff !== 0) return diff > 0;
-  }
-  return false;
-}
+/** Re-exported for existing importers; the implementation lives in version.ts (a leaf module). */
+export { isNewer };

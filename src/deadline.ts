@@ -7,7 +7,8 @@
  * so the timer usually fired *while the body was being read* — the aborted read then surfaced
  * as "Could not parse the server response" (`upstream_unavailable`), hiding both the fact that
  * it was our timeout and the server's own hint. Production acceptance hit exactly that on
- * `get_competitor_polarity` and `get_risk_context_sources`.
+ * `get_verdict` view=competitors and view=sources (then still two tools: get_competitor_polarity /
+ * get_risk_context_sources, merged on 2026-09-29).
  *
  * The fix has two halves:
  *  1. derive each tool call's deadline from the server's advertised budget

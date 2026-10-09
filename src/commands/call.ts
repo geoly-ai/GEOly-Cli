@@ -14,7 +14,9 @@ import { Ctx, CtxInput, makeCtx } from '../context.js';
 import { GeolyError, asGeolyError } from '../errors.js';
 import { McpClient, ToolInfo, WRITE_TOOLS, toolAccess, unwrapToolResult, writeGrantHint } from '../mcp.js';
 import { printResult, reportError, warn } from '../output.js';
+import { REMOVED_TOOLS, isToolNotFoundError } from '../removed-tools.js';
 import { maybeNotifyUpdate } from '../updatecheck.js';
+import { unknownToolError } from './tools.js';
 
 /** Flags owned by the CLI inside `call` — a tool param with one of these names must use --data. */
 const RESERVED = new Set([
@@ -68,12 +70,12 @@ export class CallCommand extends Command {
             hint: writeGrantHint(this.tool, ctx),
           });
         }
-        const { suggest } = await import('./tools.js');
-        throw new GeolyError('usage_error', `Unknown tool "${this.tool}"`, {
-          hint: suggest(this.tool, tools.map((t) => t.name)),
-        });
+        // A pre-0.7.0 name (unlisted by the 2026-09-29 consolidation; answered by the server until
+        // 2026-11-30, then removed) is answered with its replacement call — the CLI calls listed tools only.
+        throw unknownToolError(this.tool, tools.map((t) => t.name));
       }
-      // Retired names still answer (forwarding aliases) but the parent is the one to script against.
+      // Retired names a server lists as forwarding aliases still answer, but the parent is the one
+      // to script against. (Unlisted pre-0.7.0 names are handled above by unknownToolError.)
       if ((tool.description ?? '').startsWith('[DEPRECATED')) {
         const firstLine = (tool.description ?? '').split('\n')[0] ?? '';
         warn(`geoly: ${tool.name} is deprecated — ${firstLine.slice(0, 160)}`);
@@ -87,15 +89,24 @@ export class CallCommand extends Command {
       await maybeNotifyUpdate();
       return 0;
     } catch (err) {
-      return reportError(ctx, asGeolyError(err));
+      return reportError(ctx, asGeolyError(this.explainRemoved(err)));
     }
+  }
+
+  /**
+   * The server said "Tool X not found" for a name our tools/list cache still had: when X is a
+   * pre-0.7.0 name, answer with its replacement like the pre-check does.
+   */
+  private explainRemoved(err: unknown): unknown {
+    if (!(err instanceof GeolyError) || !Object.prototype.hasOwnProperty.call(REMOVED_TOOLS, this.tool)) return err;
+    return isToolNotFoundError(err.message) ? unknownToolError(this.tool) : err;
   }
 
   /** `geoly call <tool> --help` → schema-derived flag help. */
   private async printToolHelp(ctx: Ctx): Promise<number> {
     const tools = await new McpClient(ctx).listTools();
     const tool = tools.find((t) => t.name === this.tool);
-    if (!tool) throw new GeolyError('usage_error', `Unknown tool "${this.tool}"`);
+    if (!tool) throw unknownToolError(this.tool, tools.map((t) => t.name));
     const props = (tool.inputSchema?.properties ?? {}) as Record<string, Record<string, unknown>>;
     const required = new Set((tool.inputSchema?.required as string[] | undefined) ?? []);
     const lines = [

@@ -4,8 +4,13 @@ export const VERSION = '0.3.3';
 /** MCP protocol version this client speaks. */
 export const MCP_PROTOCOL_VERSION = '2025-06-18';
 
-/** Default remote MCP endpoint (the single production tool surface). */
-export const DEFAULT_ENDPOINT = 'https://app.geoly.ai/api/mcp';
+/**
+ * Default remote MCP endpoint: GEOly MCP v1 at its versioned address. The unversioned
+ * `/api/mcp` is the same handler and stays served for existing configs; a breaking change would
+ * ship as `/api/mcp/v2` next to it. The endpoint is never persisted — credentials are keyed by
+ * origin only — so a signed-in user simply follows this default on the next run.
+ */
+export const DEFAULT_ENDPOINT = 'https://app.geoly.ai/api/mcp/v1';
 
 /**
  * Release manifest consumed by `geoly upgrade` and the daily update notice.
@@ -37,4 +42,19 @@ export function resolveManifestUrl(): string {
     return MANIFEST_URL;
   }
   return `${raw.replace(/\/$/, '')}/latest/download/manifest.json`;
+}
+
+/**
+ * Compare dotted versions numerically segment by segment (`0.10.0` is newer than `0.9.9`).
+ * Lives here, in a leaf module, because both the update check and the skill installer need it
+ * and skills.ts must not import updatecheck.ts (which imports skills.ts).
+ */
+export function isNewer(candidate: string, current: string): boolean {
+  const a = candidate.split('.').map((p) => parseInt(p, 10) || 0);
+  const b = current.split('.').map((p) => parseInt(p, 10) || 0);
+  for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
+    const diff = (a[i] ?? 0) - (b[i] ?? 0);
+    if (diff !== 0) return diff > 0;
+  }
+  return false;
 }
