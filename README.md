@@ -3,7 +3,7 @@
 **The [GEOly](https://www.geoly.ai) command-line interface — for people and their agents.**
 
 [GEOly](https://www.geoly.ai) tracks how brands are mentioned and cited across AI engines
-(ChatGPT, Perplexity, Google AI Mode, Google AI Overview, Gemini, Copilot). The CLI works like
+(ChatGPT, Google AI Mode, Google AI Overview, Gemini, Copilot). The CLI works like
 `gh`: you sign in once, the credential stays on your machine, and the agent you already use
 (Claude Code, Codex, Cursor…) runs `geoly` commands on your behalf — it never sees a key.
 
