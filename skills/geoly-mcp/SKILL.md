@@ -1,16 +1,17 @@
 ---
 name: geoly-mcp
-description: "Use when querying or reporting on AI brand visibility through GEOly — via the geoly CLI (geoly run / geoly call) or the GEOly MCP server: routing a question to the right entry point, following the org/brand discovery flow, quoting the correct KPI caliber, and avoiding metric-definition pitfalls. Triggers: GEOly; geoly CLI; GEO / AI-visibility reporting; citation rate, mention rate, AIGVR, Share of Model; daily trends; competitor, category whitespace, brand momentum; any call to get_brand_overview / query_analytics / get_prompt_* / get_citation_* / get_category_* / get_public_* tools."
+description: "Use when querying or reporting on AI brand visibility through GEOly — via the geoly CLI (geoly run / geoly call) or the GEOly MCP server: routing a question to the right entry point, following the org/brand discovery flow, quoting the correct KPI caliber, and avoiding metric-definition pitfalls. Triggers: GEOly; geoly CLI; GEO / AI-visibility reporting; citation rate, mention rate, AIGVR, Share of Model; daily trends; competitor, category whitespace, brand momentum; any call to get_brand_overview / get_daily_trend / get_prompt_* / get_citation_* / get_category_* / get_public_* tools."
 metadata:
   author: geoly
-  version: "0.7.0"
+  version: "0.7.2"
 ---
 
 # GEOly MCP
 
 [GEOly](https://www.geoly.ai) tracks how brands are mentioned and cited across AI engines (ChatGPT,
-Perplexity, Google AI Mode, Google AI Overview, Gemini, Copilot). The MCP server exposes **up to 53 tools** (the exact set depends
-on plan, mode, and write grants; a read-only multi-org connection sees 47) across two surfaces:
+Google AI Mode, Google AI Overview, Gemini, Copilot; Perplexity is retired — historical data only, up to
+2026-09-20). The MCP server exposes **up to 55 tools** (the exact set depends
+on plan, mode, and write grants; a read-only multi-org connection sees 48) across two surfaces:
 
 - **Self / brand-own** — the customer's own monitoring, audits, GA4, and write actions.
 - **Public / industry** — cross-brand competitive intelligence (Grow tier and above).
@@ -130,9 +131,9 @@ customer sees in the GEOly app. Quote these for any "what is our citation/mentio
 rate" question. Nothing else is the headline.
 
 **2. Never arithmetic-average a daily series.**
-`query_analytics` (dataset `brand_citations_daily`) returns **per-day** rates; averaging them
-over-weights low-volume days and will NOT match the headline. For a window number, use
-`get_brand_overview`, the `recordCitationRate` metric, or re-aggregate daily rows **weighted by
+`get_daily_trend` returns **per-day** rates; averaging them over-weights low-volume days and
+will NOT match the headline. For a window number, read the same call's `totals` (record-weighted
+window values), use `get_brand_overview`, or re-aggregate daily rows **weighted by
 `completedRecords`**. The same name `citationRate` has three legitimate calibers — see
 references/metric-calibers.md.
 
@@ -217,7 +218,7 @@ public/report tools) and paginate (`currentPage == totalPages`) instead of assum
   **not** consume quota credits.
 - **Dates**: take them from `get_brand_context.today` (`record_date_key` is the value the daily
   tools' `date` axis uses — one day behind the Asia/Shanghai business day) before building date
-  ranges; `get_current_date` remains for the clock time. `query_analytics` ranges ≤ 366 days.
+  ranges; `get_current_date` remains for the clock time. `get_daily_trend` ranges ≤ 366 days (its derived data starts 2026-04-13).
   Per-answer rows (`get_prompt_record_detail`, `list_prompt_records` (incl.
   `latest_per_platform=true`), `list_brand_answers` (both views), raw
   `get_prompt_citations`) carry `businessDay` (UTC+8
@@ -233,7 +234,7 @@ the end of every tool description is the authoritative price** — read it befor
   standard 3 / deep 10 credits per call, whatever the page size — e.g. `get_brand_overview` 3,
   `get_citation_overview` 10 with `section="board"` / 3 with `section="table"`,
   `get_platform_matrix`, `get_topic_analytics` and `get_brand_search_queries` 10,
-  `query_analytics` 1. Several are also rate-guarded per minute.
+  `get_daily_trend` 1. Several are also rate-guarded per minute.
 - **Public / industry-intelligence tools** (Grow-tier or above): the cross-brand `get_public_*` and
   `get_category_*` tools are paid per view (e.g. `get_public_topic` view=`difficulty`: 3 per call
   with a `topic_id`, 1 with a `prompt_id`, 10 with a `product_space_id`); the ranked-content
@@ -362,9 +363,9 @@ decide by what you have:**
 |---|---|
 | Orientation first: brand/org, today's dates, entitled + with-data platforms, topic & filter ids, entity-layer tracked competitors, credits | `get_brand_context` (free, once per run) |
 | Headline KPI (AIGVR / mention / citation rate, whole window) | `get_brand_overview` |
-| Daily/weekly **trend** of those metrics | `query_analytics` dataset=`brand_citations_daily`, `dimensions=["date","platform"]` |
-| This period **vs the previous one** (week-over-week, month-over-month) with `days_with_data` | `query_analytics` with `compare_previous=true` (per-row `previous.*` / `delta.*`) |
-| A topic / text-defined **subset** daily series | `query_analytics` dataset=`topic_citations_daily` (+ `prompt_text_include/exclude`) |
+| Daily/weekly **trend** of those metrics (the `/performance` trend chart) | `get_daily_trend` `breakdown="platform"` (or `"total"`); `totals` = the window values of the same rows |
+| This period **vs the previous one** (week-over-week, month-over-month) with `days_with_data` | `get_daily_trend` with `compare_previous=true` (per-row and `totals` `previous.*` / `delta.*`) |
+| A topic daily series / a text-defined **subset** daily series | `get_daily_trend` `breakdown="topic"`. Text subsets have no derived-layer filter: for a lasting split (e.g. branded / non-branded) move those prompts into a topic with `move_prompts_to_topic`, then read `breakdown="topic"` or `breakdown="total"` + `topic_ids` (picked up after the next derived refresh); for one window value of a text subset, `get_prompt_list` `search=<word>` → `summary` (include-only; matches prompt text or tag name). `prompt_text_include/exclude` exist only on the deprecated `query_analytics` (scheduled for removal) |
 | Per-prompt visibility; search/list prompts (same calibers as the `/prompts` table; `summary` = the table's header bar) | `get_prompt_list` (per-prompt rate in `geoMetrics.aigvr.citationRate`; add `include_competitors=true` for SoM / competitors) |
 | One prompt's windowed overview (visibility trend, Share of Mentions, competitor board, platform matrix, source domains — the `/prompts/[id]` page) | `get_prompt_detail` (`time_range` / `platform`) |
 | Which competitors does the AI prefer **instead of** us, answer by answer (`weLose` per rival — the page's "who beats you" board; no weWin/tie any more) | `get_verdict` `view="competitors"` |
@@ -379,7 +380,7 @@ decide by what you have:**
 | Content gaps (competitor cited there, you not) | `get_citation_overview` `section="table"`, `gap_only=true` (domains, the page caliber; for one domain's prompts use `get_domain_detail` `prompts[]`) |
 | Standing **vs competitors** | `get_brand_board` (**entity caliber** — unfiltered it *is* the in-app /performance board: confirmed competitors, `visibility` = mentioned ÷ completed answers, same formula for you; `include_trend=true` for the page's daily chart — **not one point per day**: check `trendLatestDay` (yesterday is often still uncounted) and `trendTruncated` (long windows keep the newest days only). Adding `topic_ids`/`country` switches to `caliber=scoped_open_world_v0`: same row source as the page's filtered board but **different numbers** — the page still shows the legacy merged board there, fail-closed) · `get_platform_matrix` `dimension=competitor` (legacy discovered-brand record-weighted — not headline) |
 | How AI *describes* the brand (verbatim) | `list_brand_answers` `view="mention_samples"`; vs rivals → `get_competitor_cooccurrence` |
-| Topic-level analysis | `get_topic_list` (ids, free) → `get_topic_analytics` (pass `topic_ids`) or `query_analytics` `topic_citations_daily` for day-level topic trends |
+| Topic-level analysis | `get_topic_list` (ids, free) → `get_topic_analytics` (pass `topic_ids`) or `get_daily_trend` `breakdown="topic"` for day-level topic trends |
 | Sentiment (brand-wide distribution / daily trend / per platform — no verbatim highlights, use `list_brand_answers` `view="mention_samples"` for those) | `get_sentiment_dashboard` |
 | The brand library (own brand + tracked competitors + system suggestions + removed), same rows as Settings › Brand | `get_competitor_list` (competitors = `status="tracked"` and `is_own_brand=false`) |
 | Site AI-readiness audit | `get_audit_list` → `get_audit_detail` (the report header + single-page checks + fix copy in `checksMeta`) → `get_audit_detail` `section="pages"` for a site audit's per-page results / `fetch_quality=unusable` pages |
@@ -428,8 +429,7 @@ decide by what you have:**
 | Bridge my brand → public dataset | `resolve_my_brand_public` (`bestMatch` = the in-app industry-profile decision; `ambiguous=true` means the app refuses to pick — do not guess from `candidates`) |
 
 Cross-ref rule: for record counts/rates use `get_brand_overview` (not `get_citation_overview`,
-which counts URLs); for trends use `query_analytics` dataset=`brand_citations_daily` (not by
-paginating citations).
+which counts URLs); for trends use `get_daily_trend` (not by paginating citations).
 Window rule for the page-window citation tools (`get_citation_overview` / `get_domain_detail` /
 `get_url_detail window_caliber="page"`): their `time_range` is **N whole Asia/Shanghai calendar days on the
 citation-creation axis plus today** (matches the /sources/citations page), not the rolling
@@ -465,13 +465,17 @@ Read `aigvr.citationRate` / `aigvr.mentionRate` / `aigvr.score` — the report h
 
 **Honest daily trend**
 ```json
-{ "tool": "query_analytics",
-  "args": { "dataset": "brand_citations_daily", "dimensions": ["date","platform"],
-            "metrics": ["completedRecords","aigvr","mentionRate","citationRate","citationCount"],
-            "start_date": "2026-05-28", "end_date": "2026-06-26" } }
+{ "tool": "get_daily_trend",
+  "args": { "breakdown": "platform", "start_date": "2026-09-21", "end_date": "2026-10-20" } }
 ```
-Plot as-is; treat absent days as "no collection" (check `completedRecords`). For a window value,
-weight daily rates by `completedRecords` — don't simple-average.
+Plot `rows` as-is (quote `businessDate`); treat absent days as "no collection" (check
+`completedRecords`). For a window value read `totals` — don't simple-average the days.
+Citation URL counts are not in it — use `get_citation_overview`. `status="not-ready"` (with
+`reason`): `day-key-epoch` / `previous-window:day-key-epoch` = the window (or, with
+`compare_previous`, the previous one) starts before 2026-04-13, where the derived data begins —
+move `start_date` later; `flag-off:…` = not enabled on that server. Don't retry those two. Any
+other reason = the window is not built yet (shortly after midnight UTC+8, or after a topic /
+country change) — say so and retry in a few minutes.
 
 **Citation sources for a prompt**
 ```json
@@ -479,7 +483,13 @@ weight daily rates by `completedRecords` — don't simple-average.
   "args": { "prompt_id": "<id>", "deduplicate": true, "limit": 500 } }
 ```
 
-**Text-defined subset (e.g. non-branded), 3-metric daily series**
+**Text-defined subset (e.g. non-branded), 3-metric daily series** — `get_daily_trend` has no text
+filter. For a lasting split, move those prompts into a topic (`move_prompts_to_topic`) and read
+`get_daily_trend` `breakdown="topic"` (or `breakdown="total"` + `topic_ids`) — it picks the move up
+after the next derived refresh. For one window value of a text subset, `get_prompt_list`
+`search=<word>` returns `summary` (record-weighted visibility / mentionRate / citationRate of the
+whole filtered set; include-only, matches prompt text or tag name). The text filters below live
+only on `query_analytics`, which is deprecated and scheduled for removal:
 ```json
 { "tool": "query_analytics",
   "args": { "dataset": "topic_citations_daily", "dimensions": ["date"],
@@ -490,11 +500,12 @@ weight daily rates by `completedRecords` — don't simple-average.
 
 **Period-over-period in one call (delta per platform, with coverage check)**
 ```json
-{ "tool": "query_analytics",
-  "args": { "dimensions": ["platform"], "metrics": ["completedRecords","mentionRate","citationRate"],
-            "start_date": "2026-09-13", "end_date": "2026-09-19", "compare_previous": true } }
+{ "tool": "get_daily_trend",
+  "args": { "breakdown": "platform", "start_date": "2026-09-13", "end_date": "2026-09-19",
+            "compare_previous": true } }
 ```
-Each row carries `previous.mentionRate` / `delta.mentionRate` (percentage points). Quote
+Each `totals` row (one per platform, whole window) carries `previous.mentionRate` /
+`delta.mentionRate` (percentage points); the daily `rows` carry the same per day. Quote
 `window.current.days_with_data` vs `window.previous.days_with_data` alongside the delta — if the
 current window has fewer collection days, say so instead of calling the change a trend.
 

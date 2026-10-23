@@ -13,12 +13,12 @@ number to quote. When in doubt, the headline KPI always comes from `get_brand_ov
 | Metric | Means | Denominator | Read from |
 |---|---|---|---|
 | **mentionRate** | % of answers that mention the brand | completed records | `get_brand_overview` (headline) |
-| **citationRate** | % of answers that cite a brand-owned URL | completed records (prompt-equal) | `get_brand_overview` (headline) |
+| **citationRate** | % of answers that cite a brand-owned URL | completed records (record-weighted) | `get_brand_overview` (headline) |
 | **AIGVR** | composite visibility score `m × (0.4·position + 0.25·frequency + 0.25·citation)` | completed records | `get_brand_overview` (headline) |
 | **Share of Mentions (SoM)** — prompt level | brand's share of mentioned answers vs the **auto-discovered / entity-layer** competitors of ONE prompt: brand somRanked records ÷ (somRanked + every competitor's mentioned records) | all brand-mentioned records of that prompt | `get_prompt_list` (`include_competitors=true`, `geoMetrics.som.share`) / `get_prompt_detail` (`overview.brandShare`, windowed) |
 | **Share of Mentions (SoM)** — cross-prompt | **records-based**: each brand counts at most once per AI answer, vs **automatically discovered** competitors | all brand-mentioned records | `get_platform_matrix` `dimension=competitor` (since 2026-07-24, was visibility-weighted) |
 | **Share of voice (SoV)** — the in-app KPI cell | brand's mentioned answers ÷ (that number + every **auto-discovered** brand's mentioned answers), bucketed by UTC+8 business day — the **legacy discovered-brand caliber**, not the entity board | all brand-mentioned records in the window | `get_brand_overview` (`shareOfVoice.share`) — differs from `get_brand_board.ownBrand.share` (entity set) and `get_platform_matrix` SoM (entity-layer denominator) |
-| **recordCitationRate** | pooled `cited records / completed records` (record-weighted) | completed records | `query_analytics` metric |
+| **recordCitationRate** | pooled `cited records / completed records` (record-weighted) | completed records | `query_analytics` metric (deprecated tool; `get_daily_trend` `totals[].citationRate` is the record-weighted window value, pooled from the 1-decimal daily rates) |
 | **Entity visibility** (`brand_entity_v1`) | % of completed answers that mention the **brand entity** (own brand and each confirmed competitor on the **same** formula, pooled over covered days) | completed records in the covered window | `get_brand_board` **without `topic_ids`/`country`** (`ownBrand.visibility`, `rows[].visibility`) — the in-app `/performance` board |
 | **Entity share** (`brand_entity_v1`) | mentionedRecords of one entity ÷ mentionedRecords of (you + all confirmed competitors), family-deduplicated | confirmed-set mentioned records | `get_brand_board` **without `topic_ids`/`country`** (`ownBrand.share`, `rows[].share`) |
 | **Scoped pooled mention rate / candidate share** (`scoped_open_world_v0`) | tool-only caliber of the **filtered** board: `pooledMentionRate` = mentionedRecords ÷ completed records in the topic/country scope (all platforms); `candidateShare` = share within the top-200 candidate set | scoped completed records / candidate-set mentions | `get_brand_board` **with `topic_ids`/`country`** (`rows[].pooledMentionRate`, `rows[].candidateShare`, aliased as `visibility` / `share`) — **not** what the in-app filtered board shows (see below) |
@@ -42,18 +42,18 @@ The same name `citationRate` has **three legitimate values** — they differ on 
 
 | Value | Source | Aggregation | Use it as |
 |---|---|---|---|
-| **Headline (use this)** | `get_brand_overview.aigvr.citationRate` | whole-window, **prompt-equal-weight** | ✅ the KPI baseline |
-| Per-day series | `query_analytics` `citationRate` (daily rows) | per-day prompt-equal | trend shape only — **never average it** |
-| Record-weighted | `query_analytics` `recordCitationRate` | pooled cited/completed | reconcilable record-weighted figure |
+| **Headline (use this)** | `get_brand_overview.aigvr.citationRate` | whole-window, **record-weighted**; numerator = answers with a ranked brand mention **and** an own-domain citation | ✅ the KPI baseline |
+| Per-day series | `get_daily_trend` `citationRate` (daily `rows`) | per-day record-weighted; numerator = any own-domain citation | trend shape only — **never average it** |
+| Record-weighted | `get_daily_trend` `totals[].citationRate` (or the deprecated `query_analytics` `recordCitationRate`) | pooled cited/completed; numerator = any own-domain citation (no ranked mention required) | reconcilable record-weighted window value — **not** equal to the headline citationRate (different numerator) |
 
 A naive arithmetic mean of the daily series runs **~10–20 points higher** than the headline
 (low-volume days get equal weight). That gap is not a bug — it is two different statistics.
 For any KPI, quote the headline. The same caliber logic applies to mentionRate and AIGVR.
 
-**Day axis**: `query_analytics`'s `date` is `record_date` truncated to a **UTC** day key, which
+**Day axis**: `get_daily_trend`'s `date` is `record_date` truncated to a **UTC** day key, which
 is the in-app (UTC+8) business day **minus one** — the row labelled `2026-09-21` is the point
-`/performance` plots on `2026-09-22`. Add the `businessDate` dimension to get the app's label
-before quoting a date to a human. The daily rates carry 1 decimal, like the in-app trend chart.
+`/performance` plots on `2026-09-22`. Every row also carries `businessDate` (the app's label) —
+quote that one to a human. The daily rates carry 1 decimal, like the in-app trend chart.
 
 Per-prompt citation rate (same caliber as the headline) is available on
 `get_prompt_list` / `get_prompt_detail` via `geoMetrics.aigvr.citationRate` — use it for
@@ -66,9 +66,9 @@ prompt-level breakdowns instead of re-deriving from raw citations.
 1. **KPI baseline = `get_brand_overview`.** Its `aigvr.{score,mentionRate,citationRate}`
    are the headline numbers and match what the customer sees in the GEOly app. Quote these
    for any "what is our citation/mention/visibility rate" question. Nothing else is the headline.
-2. **Never arithmetic-average a daily series.** `query_analytics` (dataset `brand_citations_daily`)
-   gives **per-day** rates. For a window number use `get_brand_overview`, the `recordCitationRate`
-   metric, or re-aggregate daily rows **weighted by `completedRecords`**.
+2. **Never arithmetic-average a daily series.** `get_daily_trend` gives **per-day** rates. For a
+   window number use `get_brand_overview`, the same call's `totals` (record-weighted window values),
+   or re-aggregate daily rows **weighted by `completedRecords`**.
 3. **A gap in a daily line means "no monitoring ran that day", not "metric missing".**
    Read `completedRecords` per row: 0 or an absent row = no collection that day. AIGVR,
    mentionRate and citationRate share the same daily denominator, so they always have
@@ -167,10 +167,11 @@ prompt-level breakdowns instead of re-deriving from raw citations.
 
 ## 5. Hard limits
 
-- `query_analytics`: up to **1000 rows**; date range **≤ 366 days**.
+- `get_daily_trend`: date range **≤ 366 days**, derived data from **2026-04-13** (an earlier window start ⇒ `status="not-ready"`); the output keeps the newest whole days that fit (`_capped`).
+- `query_analytics` (deprecated, scheduled for removal): up to **1000 rows**; date range **≤ 366 days**.
 - `get_prompt_citations`: raw mode **≤ 100/page**; `deduplicate=true` **≤ 500/call**.
 - All-time citation queries are blocked (16M+ row table) — always bound by a time range.
-- Rate limit **~120 requests/min per token** — batch with `query_analytics` instead of fanning
+- Rate limit **~120 requests/min per token** — batch with `get_daily_trend` instead of fanning
   out per-prompt citation calls.
 
 ---
@@ -234,7 +235,7 @@ disagrees with a fresh pull, the fresh pull wins:
    competitor roots; other). `get_citation_overview` dropped `brandMentions`,
    `brandMentionRate`, `uniqueUrls`, `dailyTrend[].brandMentions/brandMentionRate/brandUniqueUrls`,
    `trend.brandMentions`, `trend.domains` (record-axis mention counts mixed into citation
-   data; use `get_brand_overview` / `query_analytics` dataset=`brand_citations_daily`), and added
+   data; use `get_brand_overview` / `get_daily_trend`), and added
    `ownership.competitorOwnedCitations` + `topDomains[].domainType`. Totals differ from
    pre-change pulls by the window-edge citations (typically a few percent for 30d).
 
