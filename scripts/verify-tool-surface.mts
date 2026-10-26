@@ -12,9 +12,10 @@
  *     current hosts alone, fetches the zip only when needed, carries on when the release channel
  *     is down, gives up quietly when app.geoly.ai is down or the zip does not verify, and every
  *     request is bounded (a hanging skill manifest is cut at its 5 s timeout);
- *  3. resident tool names — CORE_TOOL_NAMES = the server's RESIDENT_NAMES (2026-09-29) + the two
+ *  3. resident tool names — CORE_TOOL_NAMES = the server's RESIDENT_NAMES (2026-09-29; get_daily_trend in
+ *     place of query_analytics since 2026-10) + the two
  *     MCP selectors, and holds no removed name;
- *  4. removed tool names — the table covers all 34 (16 brand-own + 18 public); `geoly call` /
+ *  4. removed tool names — the table covers all 35 (16 brand-own + 18 public + query_analytics); `geoly call` /
  *     `geoly schema` on one exits 2 with the replacement call in the hint, also when a stale tool
  *     list sent the call and the server answered "Tool … not found" (JSON-RPC error frame or
  *     in-band isError); other unknown names keep the typo suggestion; the local agent's find_tools
@@ -271,7 +272,7 @@ async function captureStderr<T>(fn: () => T | Promise<T>): Promise<{ value: T; e
     'get_brand_context', 'get_current_date', 'get_topic_list',
     'get_prompt_list', 'get_prompt_detail', 'list_prompt_records', 'get_prompt_record_detail',
     'get_prompt_citations', 'get_url_detail', 'get_domain_detail',
-    'get_brand_overview', 'query_analytics', 'get_citation_overview', 'get_brand_search_queries',
+    'get_brand_overview', 'get_daily_trend', 'get_citation_overview', 'get_brand_search_queries',
     'get_platform_matrix', 'get_verdict',
     'search_public_entities', 'resolve_my_brand_public',
   ];
@@ -299,18 +300,22 @@ async function captureStderr<T>(fn: () => T | Promise<T>): Promise<{ value: T; e
     'list_public_locales', 'get_available_platforms', 'get_public_data_window', 'list_public_shopping_boards',
     'get_public_search_query_detail', 'get_public_shopping_card_detail',
   ];
+  // removed on its own after the consolidation (October 2026), same sunset date
+  const LATER = ['query_analytics'];
   const names = Object.keys(REMOVED_TOOLS);
-  check('4a table covers the 16 brand-own + 18 public removed names, nothing else', names.length === 34 && [...BRAND, ...PUBLIC].every((n) => names.includes(n)));
+  check('4a table covers the 16 brand-own + 18 public removed names + query_analytics, nothing else', names.length === 35 && [...BRAND, ...PUBLIC, ...LATER].every((n) => names.includes(n)));
   const chained = Object.entries(REMOVED_TOOLS).filter(([, e]) => e.tool in REMOVED_TOOLS);
   check('4a no replacement is itself a removed name', chained.length === 0, chained.map(([n]) => n).join(','));
   check('4a list_organizations is kept (not in the table)', !('list_organizations' in REMOVED_TOOLS));
 
-  const surface = ['get_url_detail', 'get_verdict', 'query_analytics', 'get_brand_overview'];
+  const surface = ['get_url_detail', 'get_verdict', 'get_daily_trend', 'get_brand_overview'];
   const e1 = unknownToolError('get_url_reference_detail', surface);
   check('4b removed name → usage_error / exit 2 naming the replacement', e1 instanceof GeolyError && e1.kind === 'usage_error' && e1.exitCode === 2 && /it is now get_url_detail/.test(e1.message), e1.message);
   check('4b hint carries the new call', (e1.hint ?? '').includes('geoly call get_url_detail --window_caliber rolling …'), e1.hint);
   const e2 = unknownToolError('get_brand_citations_daily', surface);
-  check('4c not-drop-in alias → full recipe + the caveat', (e2.hint ?? '').includes(`--metrics '["citationCount"`) && (e2.hint ?? '').includes('sentiment.avgScore') && /not a drop-in replacement/.test(e2.hint ?? '') && !/same read model/.test(e2.hint ?? ''), e2.hint);
+  check('4c not-drop-in alias → get_daily_trend recipe + the caveat', (e2.hint ?? '').includes('geoly call get_daily_trend --start_date <YYYY-MM-DD> --end_date <YYYY-MM-DD> --breakdown platform') && /no citationCount/.test(e2.hint ?? '') && /not a drop-in replacement/.test(e2.hint ?? '') && !/same read model/.test(e2.hint ?? ''), e2.hint);
+  const e2q = unknownToolError('query_analytics', surface);
+  check('4c query_analytics → removed in October 2026 (not the 0.7.0 wording), get_daily_trend + the text-subset caveat', /not in the tool list since 2026-10 — removed in October 2026/.test(e2q.message) && !/0\.7\.0 consolidation/.test(e2q.message) && /it is now get_daily_trend/.test(e2q.message) && (e2q.hint ?? '').includes('geoly call get_daily_trend') && /move_prompts_to_topic/.test(e2q.hint ?? '') && /not a drop-in replacement/.test(e2q.hint ?? ''), `${e2q.message} / ${e2q.hint}`);
   const e2b = unknownToolError('get_cf_traffic_data', ['get_traffic_data']);
   check('4c drop-in with a caveat keeps "keep the other arguments" and adds the caveat', /keep the other arguments of the old call \(default window stays 7d\)/.test(e2b.hint ?? ''), e2b.hint);
   const e3 = unknownToolError('compare_public_brands', surface);

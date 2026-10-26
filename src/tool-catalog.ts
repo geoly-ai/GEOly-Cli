@@ -31,7 +31,8 @@ const HIGH_TRAFFIC = [
   'get_domain_detail', // 2.7k
   // 品牌级总览
   'get_brand_overview', // 1.6k
-  'query_analytics', // 5.4k
+  // 逐日趋势（2026-10-21 起取代 query_analytics 的 5.4k；query_analytics 2026-10 删除，见 removed-tools.ts）
+  'get_daily_trend',
   'get_citation_overview', // 1.2k
   'get_brand_search_queries', // 1.3k
   'get_platform_matrix', // 竞品矩阵（原 get_competitor_overview 并入）
