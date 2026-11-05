@@ -3,14 +3,14 @@ name: geoly-mcp
 description: "Use when querying or reporting on AI brand visibility through GEOly — via the geoly CLI (geoly run / geoly call) or the GEOly MCP server: routing a question to the right entry point, following the org/brand discovery flow, quoting the correct KPI caliber, and avoiding metric-definition pitfalls. Triggers: GEOly; geoly CLI; GEO / AI-visibility reporting; citation rate, mention rate, AIGVR, Share of Model; daily trends; competitor, category whitespace, brand momentum; any call to get_brand_overview / get_daily_trend / get_prompt_* / get_citation_* / get_category_* / get_public_* tools."
 metadata:
   author: geoly
-  version: "0.7.2"
+  version: "0.8.0"
 ---
 
 # GEOly MCP
 
 [GEOly](https://www.geoly.ai) tracks how brands are mentioned and cited across AI engines (ChatGPT,
-Google AI Mode, Google AI Overview, Gemini, Copilot; Perplexity is retired — historical data only, up to
-2026-09-20). The MCP server exposes **up to 55 tools** (the exact set depends
+Google AI Mode, Google AI Overview, Gemini; Perplexity and Copilot are retired — historical data only, up to
+2026-09-20 and 2026-10-11 respectively). The MCP server exposes **up to 55 tools** (the exact set depends
 on plan, mode, and write grants; a read-only multi-org connection sees 48) across two surfaces:
 
 - **Self / brand-own** — the customer's own monitoring, audits, GA4, and write actions.
@@ -363,22 +363,22 @@ decide by what you have:**
 |---|---|
 | Orientation first: brand/org, today's dates, entitled + with-data platforms, topic & filter ids, entity-layer tracked competitors, credits | `get_brand_context` (free, once per run) |
 | Headline KPI (AIGVR / mention / citation rate, whole window) | `get_brand_overview` |
-| Daily/weekly **trend** of those metrics (the `/performance` trend chart) | `get_daily_trend` `breakdown="platform"` (or `"total"`); `totals` = the window values of the same rows |
+| Daily/weekly **trend** of those metrics (the `/overview` trend chart) | `get_daily_trend` `breakdown="platform"` (or `"total"`); `totals` = the window values of the same rows |
 | This period **vs the previous one** (week-over-week, month-over-month) with `days_with_data` | `get_daily_trend` with `compare_previous=true` (per-row and `totals` `previous.*` / `delta.*`) |
-| A topic daily series / a text-defined **subset** daily series | `get_daily_trend` `breakdown="topic"`. Text subsets have no derived-layer filter: for a lasting split (e.g. branded / non-branded) move those prompts into a topic with `move_prompts_to_topic`, then read `breakdown="topic"` or `breakdown="total"` + `topic_ids` (picked up after the next derived refresh); for one window value of a text subset, `get_prompt_list` `search=<word>` → `summary` (include-only; matches prompt text or tag name). `prompt_text_include/exclude` exist only on the deprecated `query_analytics` (scheduled for removal) |
+| A topic daily series / a text-defined **subset** daily series | `get_daily_trend` `breakdown="topic"`. Text subsets have no derived-layer filter: for a lasting split (e.g. branded / non-branded) move those prompts into a topic with `move_prompts_to_topic`, then read `breakdown="topic"` or `breakdown="total"` + `topic_ids` (picked up after the next derived refresh); for one window value of a text subset, `get_prompt_list` `search=<word>` → `summary` (include-only; matches prompt text or tag name). `prompt_text_include/exclude` went away with `query_analytics` (removed October 2026) |
 | Per-prompt visibility; search/list prompts (same calibers as the `/prompts` table; `summary` = the table's header bar) | `get_prompt_list` (per-prompt rate in `geoMetrics.aigvr.citationRate`; add `include_competitors=true` for SoM / competitors) |
 | One prompt's windowed overview (visibility trend, Share of Mentions, competitor board, platform matrix, source domains — the `/prompts/[id]` page) | `get_prompt_detail` (`time_range` / `platform`) |
 | Which competitors does the AI prefer **instead of** us, answer by answer (`weLose` per rival — the page's "who beats you" board; no weWin/tie any more) | `get_verdict` `view="competitors"` |
 | Which cited sites ride along with **negative** aspect judgments of us (Verdict › Sources tab: `kind`, `citedRecords`, `negativeShare`) | `get_verdict` `view="sources"` (default 7d — the page shows 30d) |
 | A prompt's **full execution history** over a range (per-day records, e.g. 30-day shopping-card trend) | `list_prompt_records` (explicit `start_date`/`end_date` are UTC+8 business days) |
-| **Read the actual answers** brand-wide — every AI answer in the window, filtered by topic / tag / country / platform / "mentions entity X" / "mentions us", paginated (= in-app /performance/answers) | `list_brand_answers` (`answerSummary` + `entities[]` + `sources[]` per row; drill one row with `get_prompt_record_detail`) |
+| **Read the actual answers** brand-wide — every AI answer in the window, filtered by topic / tag / country / platform / "mentions entity X" / "mentions us", paginated (= in-app /answers) | `list_brand_answers` (`answerSummary` + `entities[]` + `sources[]` per row; drill one row with `get_prompt_record_detail`) |
 | The actual **citation URLs / sources** for a prompt | `get_prompt_citations` (`deduplicate=true` for a source list) |
 | "Which queries never mention us" (blind spots) | `get_prompt_list` `view="mention_rates"` (worst first by default) |
 | Citation **domain distribution / ownership** | `get_citation_overview` (counts URLs, not records; window = N whole +08 calendar days + today on the citation-creation axis — read `caliber` + `window` from the response) |
 | One domain / one page deep-dive | `get_domain_detail` (the `/sources/citations/<root_domain>` drill-down) / `get_url_detail` — pick the caliber: `window_caliber="page"` (same `caliber` + `window` contract as the domain drill-down; `share` raw 0–1, shown with one decimal — but **not** the pages-tab row: lookup-URL grain and a denominator that keeps redirect links) or `window_caliber="rolling"` (default; tool-only: lookup-URL grain + rolling or custom `[start_date, end_date)` window, adds ChatGPT search sources and `prompt_id` filter — not a page row) |
 | The cited-domain table: per-domain delta, mentioned brands, "mentions you", search / sort / paging | `get_citation_overview` `section="table"` (same read model as the page) |
 | Content gaps (competitor cited there, you not) | `get_citation_overview` `section="table"`, `gap_only=true` (domains, the page caliber; for one domain's prompts use `get_domain_detail` `prompts[]`) |
-| Standing **vs competitors** | `get_brand_board` (**entity caliber** — unfiltered it *is* the in-app /performance board: confirmed competitors, `visibility` = mentioned ÷ completed answers, same formula for you; `include_trend=true` for the page's daily chart — **not one point per day**: check `trendLatestDay` (yesterday is often still uncounted) and `trendTruncated` (long windows keep the newest days only). Adding `topic_ids`/`country` switches to `caliber=scoped_open_world_v0`: same row source as the page's filtered board but **different numbers** — the page still shows the legacy merged board there, fail-closed) · `get_platform_matrix` `dimension=competitor` (legacy discovered-brand record-weighted — not headline) |
+| Standing **vs competitors** | `get_brand_board` (**tracked-brand caliber**, `caliber=tracked_brand_v1` — it *is* the in-app /overview board under any time_range / platform / topic_ids / country: rows = the competitors you track, `visibility` = mentioned ÷ counted answers, same formula for you; `avgRank` = position among tracked brands only; `computing=true` rows have null numbers; `rows[].entityId` is a tracked-brand id — pass it to `list_brand_answers` `tracked_brand_id`, not to `get_competitor_list`; `include_trend=true` for the daily chart) · `get_platform_matrix` `dimension=competitor` (legacy discovered-brand record-weighted — not headline) |
 | How AI *describes* the brand (verbatim) | `list_brand_answers` `view="mention_samples"`; vs rivals → `get_competitor_cooccurrence` |
 | Topic-level analysis | `get_topic_list` (ids, free) → `get_topic_analytics` (pass `topic_ids`) or `get_daily_trend` `breakdown="topic"` for day-level topic trends |
 | Sentiment (brand-wide distribution / daily trend / per platform — no verbatim highlights, use `list_brand_answers` `view="mention_samples"` for those) | `get_sentiment_dashboard` |
@@ -453,7 +453,9 @@ day-granular, not an instant); `get_domain_detail` / `get_url_detail` (page cali
 > removed (the three non-drop-in ones — `get_competitor_overview`, `get_brand_citations_daily`,
 > `get_content_opportunities` — already only return a free `TOOL_REMOVED` notice); always call the
 > new names. Old → new: tools-catalog § Pre-0.7.0 brand-own names and § Pre-0.7.0 public names
-> (also CHANGELOG 0.7.0 § Versioning).
+> (also CHANGELOG 0.7.0 § Versioning). `query_analytics` (deprecated in 0.7.2) was removed in October
+> 2026 and answers the same free `TOOL_REMOVED` notice until 2026-11-30 — tools-catalog § Removed after
+> 0.7.0; use `get_daily_trend`.
 
 ## Recipes
 
@@ -488,15 +490,9 @@ filter. For a lasting split, move those prompts into a topic (`move_prompts_to_t
 `get_daily_trend` `breakdown="topic"` (or `breakdown="total"` + `topic_ids`) — it picks the move up
 after the next derived refresh. For one window value of a text subset, `get_prompt_list`
 `search=<word>` returns `summary` (record-weighted visibility / mentionRate / citationRate of the
-whole filtered set; include-only, matches prompt text or tag name). The text filters below live
-only on `query_analytics`, which is deprecated and scheduled for removal:
-```json
-{ "tool": "query_analytics",
-  "args": { "dataset": "topic_citations_daily", "dimensions": ["date"],
-            "metrics": ["aigvr","mentionRate","citationRate"],
-            "prompt_text_exclude": "<brandword>",
-            "start_date": "2026-05-28", "end_date": "2026-06-26" } }
-```
+whole filtered set; include-only, matches prompt text or tag name). The old `prompt_text_include` /
+`prompt_text_exclude` filters were removed with `query_analytics` (October 2026) and have no
+replacement — there is no exclude-by-text daily series.
 
 **Period-over-period in one call (delta per platform, with coverage check)**
 ```json

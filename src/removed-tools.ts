@@ -1,5 +1,6 @@
 /**
- * Pre-0.7.0 tool names the server no longer lists, and where each one went.
+ * Tool names the server no longer lists, and where each one went: the 34 pre-0.7.0 names of the
+ * consolidation, plus `query_analytics`, removed on its own in October 2026 (same sunset date).
  *
  * On 2026-09-29 the GEOly tool surface was consolidated (geoly-app #1985, skill 0.7.0): related
  * tools became views / modes / parameters of one tool, and the old names left `tools/list`.
@@ -8,7 +9,8 @@
  * never existed); successful old-name results carry `_deprecated { sunset: "2026-11-30", use }`.
  * The other three (get_competitor_overview, get_brand_citations_daily, get_content_opportunities)
  * were not drop-in and are **already removed**: until the same date the server only returns a
- * free `TOOL_REMOVED` error naming the replacement. The CLI only calls tools the server lists, so
+ * free `TOOL_REMOVED` error naming the replacement. `query_analytics` (deprecated in skill 0.7.2) was
+ * removed the same way in October 2026 and shares that notice and date. The CLI only calls tools the server lists, so
  * this table is local guidance: it turns an old name into "it is `get_url_detail` now —
  * `geoly call get_url_detail --window_caliber rolling …`" so work moves to the current names
  * before the sunset date.
@@ -39,33 +41,19 @@ export interface RemovedTool {
   /** A caveat worth knowing (a default, a renamed parameter, a price), when there is one. */
   note?: string;
   /**
-   * The three non-drop-in names, already removed on the server (free `TOOL_REMOVED` until
+   * The non-drop-in names, already removed on the server (free `TOOL_REMOVED` until
    * 2026-11-30): their replacement is a different shape, price or question, so the hint must not
    * say "same arguments, same numbers".
    */
   notDropIn?: true;
+  /**
+   * Set only for a name removed on its own after the 0.7.0 consolidation (query_analytics): when it
+   * left the tool list and why, quoted instead of the consolidation wording.
+   */
+  removedLater?: { on: string; what: string };
 }
 
 const ph = (placeholder: string): Placeholder => ({ placeholder });
-
-/** The full per-day recipe that reproduces the pre-0.7.0 get_brand_citations_daily rows. */
-const DAILY_METRICS = [
-  'citationCount',
-  'mentionCount',
-  'mentionedRecords',
-  'completedRecords',
-  'brandCitationRecords',
-  'aigvr',
-  'mentionRate',
-  'citationRate',
-  'sentiment.positive',
-  'sentiment.neutral',
-  'sentiment.negative',
-  'sentiment.mixed',
-  'sentiment.unknown',
-  'sentiment.scoredRecords',
-  'sentiment.avgScore',
-];
 
 export const REMOVED_TOOLS: Readonly<Record<string, RemovedTool>> = {
   // ---- Brand-own (16) ------------------------------------------------------------------------
@@ -76,19 +64,13 @@ export const REMOVED_TOOLS: Readonly<Record<string, RemovedTool>> = {
     note:
       'same competitor set and numbers, different shape: your brand = the first row (isBrand) and its totals, competitors = the other rows (totals + per-platform cells); ranked by metric, not by mentions; priced deep 10 credits (was standard 3)',
   },
+  // Server recipe since 2026-10-21 (skill 0.7.2): get_daily_trend; the old query_analytics recipe is gone with it.
   get_brand_citations_daily: {
-    tool: 'query_analytics',
-    args: {
-      dataset: 'brand_citations_daily',
-      start_date: ph('<YYYY-MM-DD>'),
-      end_date: ph('<YYYY-MM-DD>'),
-      dimensions: ['date', 'platform', 'platformName'],
-      metrics: DAILY_METRICS,
-      limit: 1000,
-    },
+    tool: 'get_daily_trend',
+    args: { start_date: ph('<YYYY-MM-DD>'), end_date: ph('<YYYY-MM-DD>'), breakdown: 'platform' },
     notDropIn: true,
     note:
-      'pass this full recipe (the dataset alone returns only 6 default metrics); rows[] with flat sentiment.* columns; more than 1000 date x platform rows (about 166 days on all platforms) must be split into shorter windows',
+      'the same per day x platform rows read from the daily derived layer: fixed columns, sentiment nested under sentiment {}, no citationCount (citation URLs: get_citation_overview); status "not-ready" replaces the old raw-table fallback (derived data starts 2026-04-13); long windows keep the newest days that fit (_capped)',
   },
   get_content_opportunities: {
     tool: 'get_citation_overview',
@@ -122,6 +104,16 @@ export const REMOVED_TOOLS: Readonly<Record<string, RemovedTool>> = {
   get_brand_mention_samples: { tool: 'list_brand_answers', args: { view: 'mention_samples' } },
   get_audit_pages: { tool: 'get_audit_detail', args: { section: 'pages' } },
   get_agent_ready_scan_detail: { tool: 'get_agent_ready_scans', args: { scan_id: ph('<scan_id>') } },
+
+  // ---- Removed after 0.7.0 (1) ------------------------------------------------------------
+  query_analytics: {
+    tool: 'get_daily_trend',
+    args: { start_date: ph('<YYYY-MM-DD>'), end_date: ph('<YYYY-MM-DD>'), breakdown: 'platform' },
+    notDropIn: true,
+    removedLater: { on: '2026-10', what: 'removed in October 2026 (deprecated since skill 0.7.2)' },
+    note:
+      'fixed columns from the daily derived layer: dimensions ["date","platform"] = breakdown platform, ["date"] = total, the topic dataset = topic; window values are totals[]; sentiment comes back nested; no citationCount (get_citation_overview), no domain dataset, no limit. prompt_text_include / prompt_text_exclude have no equivalent: move those prompts into a topic (move_prompts_to_topic) and read breakdown topic or topic_ids, or get_prompt_list search for one window value (include-only)',
+  },
 
   // ---- Public / industry (18) ----------------------------------------------------------------
   get_public_topic_overview: { tool: 'get_public_topic', args: { view: 'overview' } },
@@ -207,9 +199,10 @@ export function replacementCall(entry: RemovedTool, style: 'cli' | 'fn'): string
 }
 
 /**
- * The one-paragraph explanation for a pre-0.7.0 name, or undefined when `name` is not one.
+ * The one-paragraph explanation for a removed name (pre-0.7.0, or query_analytics), or undefined when `name` is not one.
  * Wording rule: a drop-in name still answers on the server until 2026-11-30 and is then removed;
- * the three non-drop-in names are already removed (free TOOL_REMOVED notice until that date).
+ * the non-drop-in names (the three 0.7.0 ones and query_analytics) are already removed (free TOOL_REMOVED notice
+ * until that date); query_analytics names its own removal date instead of the consolidation.
  * Either way the CLI points at the current name.
  * `available` = the tool names this token actually has, to flag a replacement it does not have
  * either (e.g. public tools below the Grow plan).
@@ -221,7 +214,9 @@ export function removedToolAdvice(
 ): { message: string; hint: string; replacement: string } | undefined {
   const entry = Object.prototype.hasOwnProperty.call(REMOVED_TOOLS, name) ? REMOVED_TOOLS[name] : undefined;
   if (!entry) return undefined;
-  const message = entry.notDropIn
+  const message = entry.removedLater
+    ? `Unknown tool "${name}": not in the tool list since ${entry.removedLater.on} — ${entry.removedLater.what} (the server only returns a free TOOL_REMOVED notice until ${LEGACY_SUNSET}, then stops recognising it); it is now ${entry.tool}`
+    : entry.notDropIn
     ? `Unknown tool "${name}": not in the tool list since ${REMOVED_ON} — a pre-0.7.0 name that was removed in the 0.7.0 consolidation (the server only returns a free TOOL_REMOVED notice until ${LEGACY_SUNSET}, then stops recognising it); it is now ${entry.tool}`
     : `Unknown tool "${name}": not in the tool list since ${REMOVED_ON} — a pre-0.7.0 name that the server still answers until ${LEGACY_SUNSET} and then removes; it is now ${entry.tool}`;
   const missing =
