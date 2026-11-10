@@ -60,11 +60,12 @@ export class RunsListCommand extends GeolyCommand {
     description: 'Recent runs for the organization (receipt fields, newest first).',
     examples: [
       ['Last 20 runs', 'geoly runs list'],
-      ['One brand, more rows', 'geoly runs list --brand br_123 --limit 50'],
+      ['One project, more rows', 'geoly runs list --project br_123 --limit 50'],
     ],
   });
 
-  brand = Option.String('--brand', { description: 'Only runs bound to this brand id' });
+  // --project 是主名，--brand 永久保留为别名（服务端参数名仍是 brand_id）。
+  brand = Option.String('--project,--brand', { description: 'Only runs bound to this project, i.e. its brand_id (--brand is an alias)' });
   limit = Option.String('--limit', { description: 'Rows to return (1–50, default 20)' });
 
   protected async run(ctx: Ctx): Promise<number> {

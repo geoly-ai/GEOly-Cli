@@ -44,7 +44,7 @@ const REMEMBER_TOOL = {
   type: 'function' as const,
   name: 'remember',
   description:
-    'Keep a short note for future sessions with this brand, or update/remove one. ' +
+    'Keep a short note for future sessions with this project, or update/remove one. ' +
     'Notes live in a local markdown file the user can edit. Same slug overwrites. ' +
     'You decide what is worth keeping — durable facts, corrections the user made, ' +
     'conclusions you would otherwise re-derive. Do not store transient query results.',

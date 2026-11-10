@@ -39,7 +39,7 @@ Windows: `irm https://raw.githubusercontent.com/geoly-ai/GEOly-Cli/main/install.
 geoly init
 
 # Ask the hosted GEO agent — one JSON receipt on stdout, progress on stderr
-geoly run "how did our ChatGPT visibility move this week?" --brand br_123
+geoly run "how did our ChatGPT visibility move this week?" --project br_123
 
 # Raw data: discover, inspect, call
 geoly tools --json
@@ -49,6 +49,13 @@ geoly call get_brand_overview --time_range 30d
 # Both credit pools
 geoly credits
 ```
+
+**Projects.** A project is GEOly's monitoring unit: it tracks one own brand plus its
+competitors. `--project <id>` pins one on `geoly run`, `geoly runs list`, `geoly ask` and
+`geoly`; without it the server picks your token's default project. For historical reasons a project's
+id is passed to the server as `brand_id` — that is also its parameter name in `geoly call`
+(`--brand_id`), and `geoly call list_brands` lists your projects. Own-monitoring `brand_id` is
+never a `public_brand.id`. `--brand` keeps working as an alias of `--project`.
 
 **Signing in.** Any command that needs credentials opens your browser once and continues
 (`geoly auth login` does it explicitly). No browser on this machine (SSH, a container)?

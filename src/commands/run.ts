@@ -193,7 +193,7 @@ export class RunCommand extends GeolyCommand {
 ${renderExitCodeTable()}
     `,
     examples: [
-      ['Ask a question', 'geoly run "how did our visibility move this week?" --brand br_123'],
+      ['Ask a question', 'geoly run "how did our visibility move this week?" --project br_123'],
       ['Server-defined deliverable with a spend cap', 'geoly run "weekly health" --spec geo-weekly-brand-health --max-credits 300'],
       ['Stream the answer as text', 'geoly run --output raw "which sources cite us most?"'],
       ['Look up an earlier run', 'geoly run run_01J…'],
@@ -202,7 +202,10 @@ ${renderExitCodeTable()}
   });
 
   question = Option.String({ required: true, name: 'question | run_id' });
-  brand = Option.String('--brand', { description: 'Brand id to bind the run to (defaults to the token brand)' });
+  // --project 是主名，--brand 永久保留为别名；两种写法落到同一字段，幂等键因此一致（同一条命令换写法也会回放）。
+  brand = Option.String('--project,--brand', {
+    description: "Project to bind the run to, sent to the server as brand_id (defaults to the token's project; --brand is an alias)",
+  });
   spec = Option.String('--spec', { description: 'Server-defined deliverable spec (e.g. geo-weekly-brand-health, geo-content-brief, geo-serp-gap, geo-keyword-research-report)' });
   extraContext = Option.String('--context', { description: 'Extra input for the agent; @file reads a file' });
   maxCredits = Option.String('--max-credits', { description: 'Cap this run\'s spend (credits, 25..2000)' });
