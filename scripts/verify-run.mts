@@ -24,8 +24,9 @@
  *     (and only the answer — the run id goes to stderr, 0.3.1);
  * 15. a server that never sends headers → kind timeout (exit 6) inside `--timeout` (0.3.1: the
  *     deadline used to be missing on the streaming request entirely);
- * 16. `geoly call` rejects parameters the schema does not declare — typo, and brand/org
- *     scoping on a single-brand token — as usage_error, before anything is sent;
+ * 16. `geoly call` rejects parameters the schema does not declare — typo, and project/org
+ *     scoping on a single-project token, and `--project` / `--brand` where the tool takes the
+ *     project as `--brand_id` — as usage_error, before anything is sent;
  * 17. `--context @file` decodes UTF-8 (BOM or not) and UTF-16 (BOM) and refuses other bytes;
  * 18. a bad command line (missing positional / unknown flag / unknown subcommand) is a
  *     usage_error on stderr with exit 2 and honours --error-format json — never stdout / exit 1;
@@ -36,6 +37,9 @@
  * 21. an SSE reply whose stream stays open after the JSON-RPC frame (proxy / keep-alive) is
  *     resolved from the frame at once instead of waiting for EOF (0.3.1: twice in production a
  *     19s tool answer was thrown away because the CLI sat on `res.text()` until its own timeout).
+ * 22. `--project` is the flag name and `--brand` its permanent alias: on `geoly`, `geoly run`,
+ *     `geoly runs list` and `geoly ask` both spellings (and `--project=`) parse to the same value,
+ *     so the request and the idempotency key are identical; `--help` shows `--project`.
  */
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -346,7 +350,24 @@ async function main(): Promise<void> {
   const typo = paramErr('time-range');
   check('16a typo → usage_error naming the declared parameter', typo?.kind === 'usage_error' && /--time_range/.test(typo.hint ?? ''), typo?.hint);
   const brandErr = paramErr('brand_id');
-  check('16b brand_id on a single-brand token → usage_error that explains the token', brandErr?.kind === 'usage_error' && /bound to one brand/.test(brandErr.message), brandErr?.message);
+  check('16b brand_id on a single-project token → usage_error that explains the token', brandErr?.kind === 'usage_error' && /bound to one project/.test(brandErr.message), brandErr?.message);
+  // --project / --brand 是 run/runs/chat/ask 的旗标，不是工具参数：工具声明了 brand_id 时指向 --brand_id，
+  // 没声明时（单项目 token）同 16b 一样解释成 token 绑定。
+  const scopedTool = { name: 'get_brand_overview', inputSchema: { type: 'object', properties: { brand_id: { type: 'string' }, time_range: { type: 'string' } } } };
+  const scopedErr = (name: string): GeolyError | undefined => {
+    try {
+      assertKnownParam(scopedTool, name, scopedTool.inputSchema.properties as Record<string, Record<string, unknown>>, '--');
+      return undefined;
+    } catch (err) {
+      return err instanceof GeolyError ? err : undefined;
+    }
+  };
+  for (const flag of ['project', 'brand']) {
+    const e = scopedErr(flag);
+    check(`16e --${flag} on a tool with brand_id → usage_error pointing at --brand_id`, e?.kind === 'usage_error' && /--brand_id/.test(e.hint ?? '') && /brand_id/.test(e.message), `${e?.message} / ${e?.hint}`);
+  }
+  const projectSingle = paramErr('project');
+  check('16f --project on a single-project token → usage_error that explains the token', projectSingle?.kind === 'usage_error' && /bound to one project/.test(projectSingle.message), projectSingle?.message);
   check('16c declared parameter passes', paramErr('platform') === undefined);
   const anyTool = { name: 'free_form', inputSchema: { type: 'object', properties: {} } };
   let openOk = true;
@@ -406,6 +427,46 @@ async function main(): Promise<void> {
     badFlagJson = undefined;
   }
   check('18b unknown flag + --error-format json → JSON usage_error on stderr, exit 2', badFlag.status === 2 && badFlagJson?.kind === 'usage_error', `status=${badFlag.status} stderr=${badFlag.stderr.trim()}`);
+
+  // 22. --project 主名 / --brand 永久别名：用真实 clipanion 解析四个命令，两种写法（含 --project=）
+  //     必须落到同一个字段、同一个值，从而发给服务端的 brand_id 与幂等键都完全一致。
+  const { Cli } = await import('clipanion');
+  const { ChatCommand } = await import('../src/commands/chat.js');
+  const { RunCommand } = await import('../src/commands/run.js');
+  const { RunsListCommand } = await import('../src/commands/runs.js');
+  const { AskCommand } = await import('../src/commands/ask.js');
+  const { idempotencyKeyFor } = await import('../src/runs.js');
+  const flagCli = new Cli({ binaryName: 'geoly' });
+  for (const command of [ChatCommand, RunCommand, RunsListCommand, AskCommand]) flagCli.register(command);
+  const parseProject = (argv: string[]): { cls: string; brand?: string } => {
+    const command = flagCli.process(argv) as unknown as { constructor: { name: string }; brand?: string };
+    return { cls: command.constructor.name, brand: command.brand };
+  };
+  const flagShapes: Array<[string, string, string[]]> = [
+    ['geoly', 'ChatCommand', []],
+    ['geoly run', 'RunCommand', ['run', 'q?']],
+    ['geoly runs list', 'RunsListCommand', ['runs', 'list']],
+    ['geoly ask', 'AskCommand', ['ask', 'q?']],
+  ];
+  for (const [label, cls, base] of flagShapes) {
+    const viaProject = parseProject([...base, '--project', 'br_p1']);
+    const viaBrand = parseProject([...base, '--brand', 'br_p1']);
+    const viaEquals = parseProject([...base, '--project=br_p1']);
+    const omitted = parseProject(base);
+    check(
+      `22a ${label}: --project / --brand / --project= parse to the same project`,
+      [viaProject, viaBrand, viaEquals].every((p) => p.cls === cls && p.brand === 'br_p1') && omitted.cls === cls && omitted.brand === undefined,
+      JSON.stringify({ viaProject, viaBrand, viaEquals, omitted }),
+    );
+  }
+  const runViaProject = parseProject(['run', 'q?', '--project', 'br_p1']);
+  const runViaBrand = parseProject(['run', 'q?', '--brand', 'br_p1']);
+  check(
+    '22b geoly run: both spellings → same idempotency key (a retry with the other spelling replays)',
+    idempotencyKeyFor(ctx, { question: 'q?', brandId: runViaProject.brand }) === idempotencyKeyFor(ctx, { question: 'q?', brandId: runViaBrand.brand }),
+  );
+  const runHelp = runBin(['run', '--help']);
+  check('22c geoly run --help shows --project (alias --brand)', runHelp.status === 0 && /--project/.test(runHelp.stdout) && /--brand/.test(runHelp.stdout), runHelp.stdout.split(/\r?\n/).filter((l) => /--project|--brand/.test(l)).join(' | ') || runHelp.stderr.trim());
 
   // 19. budget stop: done / exit 0, stderr says partial, receipt carries what the CLI knows
   mode = 'budget';

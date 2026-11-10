@@ -26,12 +26,15 @@ export class AskCommand extends GeolyCommand {
     examples: [
       ['Plain question', 'geoly ask "how did our visibility move over the last 30 days?"'],
       ['Stream the answer as text', 'geoly ask --output raw "which sources cite us most?"'],
-      ['Pin a brand', 'geoly ask --brand br_123 "top competitors on ChatGPT"'],
+      ['Pin a project', 'geoly ask --project br_123 "top competitors on ChatGPT"'],
     ],
   });
 
   question = Option.String({ required: true });
-  brand = Option.String('--brand', { description: 'Brand id to bind this run to (defaults to the token brand)' });
+  // --project 是主名，--brand 永久保留为别名（服务端参数名仍是 brand_id）。
+  brand = Option.String('--project,--brand', {
+    description: "Project to bind this run to, sent to the server as brand_id (defaults to the token's project; --brand is an alias)",
+  });
   locale = Option.String('--locale', { description: 'Answer language: zh | en' });
   allowWrites = Option.Boolean('--allow-writes', false, {
     description: 'Let the agent write files into the workspace and call GEOly write tools (archive_prompt, update_prompt_tags, …)',

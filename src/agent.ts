@@ -104,7 +104,7 @@ function delay(ms: number, signal: AbortSignal): Promise<void> {
  * | 402 `SUBSCRIPTION_INACTIVE`     | the org has no active subscription   | subscribe            |
  * | 402 `INSUFFICIENT_CREDITS`      | subscribed, AI Credits used up       | wait for reset / top up |
  * | 403 `ORG_SELECTION_REQUIRED`    | the consented org scope went stale   | re-run `geoly auth login` |
- * | 400 (ambiguous org / brand)     | needs `--org` or `--brand`           | the message lists the options |
+ * | 400 (ambiguous org / project)   | needs `--org` or `--project`         | the message lists the options |
  * | 429                             | rate limited                         | back off (retryable) |
  * | 502 / 503 / 504                 | model gateway or billing store down  | back off (retryable) |
  *
@@ -170,11 +170,12 @@ export async function throwForStatus(res: Response): Promise<never> {
   }
 
   if (res.status === 400 || res.status === 404 || res.status === 413) {
-    // Scope errors carry the candidate organizations/brands in the message — pass it through
-    // verbatim, it is the actionable part.
+    // Scope errors carry the candidate organizations/projects in the message — pass it through
+    // verbatim, it is the actionable part. The server still names the project parameter
+    // `brand_id` (contract), so the match below keeps that literal.
     throw new GeolyError('usage_error', error || `Rejected (HTTP ${res.status})`, {
       status: res.status,
-      hint: /org_id|brand_id|ambiguous/i.test(error) ? 'Pass --org and/or --brand.' : undefined,
+      hint: /org_id|brand_id|ambiguous/i.test(error) ? 'Pass --org and/or --project.' : undefined,
     });
   }
 

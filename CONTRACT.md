@@ -14,15 +14,15 @@ change without notice.
 ## Commands (v0.3)
 
 ```
-geoly                       [--brand <id>] [--locale zh|en] [--continue]
+geoly                       [--project <id>] [--locale zh|en] [--continue]
                             [--workspace <dir>] [--allow-writes]
 geoly init [--agent claude-code|codex|cursor] [--no-login]
-geoly run "<question>" [--brand <id>] [--spec <slug>] [--context <text|@file>]
+geoly run "<question>" [--project <id>] [--spec <slug>] [--context <text|@file>]
                        [--max-credits <n>] [--wait <sec>|--no-wait] [--no-save] [-o <file>]
                        [--idempotency-key <key>]
 geoly run <run_id> [--wait <sec>]
 geoly runs wait <run_id> [--wait <sec>] [--interval <sec>] [--no-save] [-o <file>]
-geoly runs list [--brand <id>] [--limit <n>]
+geoly runs list [--project <id>] [--limit <n>]
 geoly credits
 geoly auth login [--profile <name>] [--no-browser] [--remote] [--code <code>]
 geoly auth status
@@ -32,10 +32,17 @@ geoly whoami
 geoly tools [--json] [--refresh]
 geoly schema <tool>
 geoly call <tool> [--<param> <value> ...] [--input -] [--data '<json>']
-geoly ask "<question>" [--brand <id>] [--locale zh|en]      # deprecated → geoly run
+geoly ask "<question>" [--project <id>] [--locale zh|en]    # deprecated → geoly run
 geoly upgrade
 geoly completions <shell>
 ```
+
+**`--project <id>`** pins the project a session or run is bound to. A project is GEOly's
+monitoring unit: it tracks one own brand plus its competitors. For historical reasons a
+project's id is passed to the server as `brand_id` (and tools such as `list_brands` list
+projects); own-monitoring `brand_id` is never a `public_brand.id`. `--brand <id>` is a
+permanent alias of `--project <id>` — scripts written against it keep working, and the two
+spellings produce the same request (and the same idempotency key).
 
 **Admission rule for new verbs** (borrowed from Google's `gws` helpers): if `geoly call` or
 `geoly run` can already do it, it does not become a command. Flags control orchestration, not
@@ -82,7 +89,7 @@ output shape (output is `--output json|raw`, everywhere).
 - **`--context @file`** reads the file as text: UTF-8 (BOM stripped) or UTF-16 with a BOM
   (what Windows PowerShell 5.1 `Out-File` writes). Bytes that are neither are a usage error —
   the CLI never guesses a code page and never sends mojibake to the agent.
-- **Idempotency.** Each `run` sends `Idempotency-Key = sha256(org, brand, spec, question,
+- **Idempotency.** Each `run` sends `Idempotency-Key = sha256(org, project, spec, question,
   context, max_credits)` — every input that changes what the server would do, so changing any
   of them (a lower `--max-credits` included) is a new command, not a replay. Re-sending the same
   command within 10 minutes makes the server replay the existing
@@ -116,9 +123,10 @@ output shape (output is `--output json|raw`, everywhere).
   argument object; `--input -` reads it from stdin. Individual flags override same-name
   fields from `--data`/`--input`. **A parameter the tool's schema does not declare is a usage
   error** (exit 2, with the nearest declared name) — the server drops unknown keys silently,
-  so `--time-range` used to run the default window and `--brand_id` on a single-brand token
-  used to return the default brand's numbers, both exit 0. `--brand`, `--brand_id` and
-  `--org_id` on a tool that lacks them say so explicitly (switch organization with `--org`).
+  so `--time-range` used to run the default window and `--brand_id` on a single-project token
+  used to return the default project's numbers, both exit 0. `--project`, `--brand`,
+  `--brand_id` and `--org_id` on a tool that lacks them say so explicitly (tools take the
+  project as `--brand_id`; switch organization with `--org`).
 - **Pre-0.7.0 tool names say where they went.** The 2026-09-29 tool-surface consolidation (GEOly
   skill 0.7.0) took 34 tool names off the tool list. The server (`/api/mcp/v1` = GEOly MCP v1, also served at `/api/mcp`;
   `GEOly-MCP-Version: 1`) still answers them as hidden names **until 2026-11-30 and then removes
@@ -144,7 +152,7 @@ output shape (output is `--output json|raw`, everywhere).
 - **`geoly` with no arguments is the product**: an interactive session. You type, the agent
   works, you watch what it runs. `/help` lists the in-session commands (`/new`, `/memory`,
   `/tools`, `/exit`); Ctrl-C interrupts the running turn without ending the session, Ctrl-D
-  exits. `--continue` resumes the most recent session for the resolved brand. Piped stdin
+  exits. `--continue` resumes the most recent session for the resolved project. Piped stdin
   (`echo "..." | geoly`) answers once and exits. Transcripts are written to
   `~/.geoly/sessions/<id>.jsonl`.
 - `geoly ask` is the same agent, non-interactive, for scripts. The loop runs **in this
@@ -185,7 +193,7 @@ The agent decides the steps and when they are done; the CLI only displays them.
 The agent starts with a working set rather than the whole GEOly tool surface: the paths that
 account for most real usage (the list ↔ detail drill-down chain and the brand-level overviews,
 by call volume across all callers; the same list as the hosted agent's, plus the organization /
-brand selectors), plus the local ones (files, memory, page fetch). Anything else — audits,
+project selectors `list_organizations` / `list_brands`), plus the local ones (files, memory, page fetch). Anything else — audits,
 shopping shelves, ads, source scorecards, sentiment, locale and category browsing — it pulls in
 on demand with `find_tools`, and you will see a `+ tool_name` line when it does. This keeps the
 choice in front of the model small and relevant; nothing is out of reach.

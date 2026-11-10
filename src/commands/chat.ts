@@ -32,7 +32,7 @@ const SLASH_COMMANDS = ['/new', '/status', '/memory', '/memory edit', '/tools', 
 const HELP = `
   ${style.bold('Commands')}
     /new            start a fresh conversation (memory is kept)
-    /status         what this session is: brand, model, workspace, usage so far
+    /status         what this session is: project, model, workspace, usage so far
     /memory         show the notes the agent carries into every turn
     /memory edit    print the path of the memory file so you can open it
     /tools          how many tools this session exposes
@@ -58,14 +58,15 @@ export class ChatCommand extends GeolyCommand {
     examples: [
       ['Start a session', 'geoly'],
       ['Continue where you left off', 'geoly --continue'],
-      ['Pin a brand', 'geoly --brand br_123'],
+      ['Pin a project', 'geoly --project br_123'],
     ],
   });
 
-  brand = Option.String('--brand', { description: 'Brand id to bind this session to' });
+  // --project 是主名，--brand 永久保留为别名（服务端参数名仍是 brand_id）。
+  brand = Option.String('--project,--brand', { description: 'Project to bind this session to, sent to the server as brand_id (--brand is an alias)' });
   locale = Option.String('--locale', { description: 'Answer language: zh | en' });
   continueSession = Option.Boolean('--continue,-c', false, {
-    description: 'Resume the most recent session for this brand',
+    description: 'Resume the most recent session for this project',
   });
   allowWrites = Option.Boolean('--allow-writes', false, {
     description: 'Approve file writes up front (required when stdin is piped)',
@@ -272,7 +273,7 @@ export class ChatCommand extends GeolyCommand {
   /** `/status` — the banner's facts plus what has happened since. */
   private status(session: AgentSession, stats: SessionStats): void {
     const pairs: Array<[string, string]> = [
-      ['brand', `${session.profile.brand.name} ${style.dim(session.profile.brand.id)}`],
+      ['project', `${session.profile.brand.name} ${style.dim(session.profile.brand.id)}`],
       ['model', session.profile.model],
       ['tools', `${session.toolCount} loaded · ${session.catalogSize} reachable`],
       ['memory', `${session.memoryCount} note${session.memoryCount === 1 ? '' : 's'} · ${memoryPath(session.profile.brand.id)}`],

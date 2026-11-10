@@ -256,8 +256,8 @@ export function buildArguments(parsed: ParsedCall, tool: ToolInfo): Record<strin
  * A parameter the schema does not declare is a usage error, not a pass-through.
  *
  * The server drops unknown keys silently, so before this `--time-range 7d` (hyphen) ran the
- * default 30-day window, `--brand_id <other org's brand>` on a single-brand token returned the
- * default brand's numbers, and `--nope 1` cost credits — all exit 0, all wrong data. The schema
+ * default 30-day window, `--brand_id <other org's project>` on a single-project token returned the
+ * default project's numbers, and `--nope 1` cost credits — all exit 0, all wrong data. The schema
  * is already in hand (`geoly schema <tool>` prints it), so the check is free.
  */
 export function assertKnownParam(
@@ -271,22 +271,23 @@ export function assertKnownParam(
   if (known.length === 0 || tool.inputSchema?.additionalProperties === true) return;
   if (name in props) return;
   const where = prefix ? `${prefix}${name}` : `"${name}" in --data/--input`;
-  // brand/org scoping deserves its own words: the parameter is missing *because of the token*,
-  // not because the tool never had it.
-  if (name === 'brand' || name === 'brand_id' || name === 'org_id') {
-    if (name === 'brand' && 'brand_id' in props) {
-      throw new GeolyError('usage_error', `${where} is not a parameter of ${tool.name}; the schema name is brand_id`, {
+  // project/org scoping deserves its own words: the parameter is missing *because of the token*,
+  // not because the tool never had it. `--project` (alias `--brand`) is the flag on run / runs /
+  // chat / ask; a tool takes the project as its `brand_id` schema parameter, so point there.
+  if (name === 'project' || name === 'brand' || name === 'brand_id' || name === 'org_id') {
+    if ((name === 'project' || name === 'brand') && 'brand_id' in props) {
+      throw new GeolyError('usage_error', `${where} is not a parameter of ${tool.name}; tools take the project as brand_id`, {
         hint: `geoly call ${tool.name} --brand_id <id> …`,
       });
     }
     throw new GeolyError(
       'usage_error',
-      `${where} is not a parameter of ${tool.name} for this token — it is bound to one brand, so the call would silently run against that brand`,
+      `${where} is not a parameter of ${tool.name} for this token — it is bound to one project, so the call would silently run against that project`,
       {
         hint:
           name === 'org_id'
             ? 'Switch organization with the global --org <org_id> flag instead.'
-            : 'Use --org <org_id> to switch organization; multi-brand tokens expose brand_id on every brand tool (see `geoly schema ' + tool.name + '`).',
+            : 'Use --org <org_id> to switch organization; multi-project tokens expose brand_id on every project-scoped tool (see `geoly schema ' + tool.name + '`).',
       },
     );
   }
