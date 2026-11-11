@@ -25,7 +25,7 @@ whitespace, momentum, AI-search demand, perception, shopping.
   public tools too**, as long as any accessible org qualifies (writes stay clamped read-only).
   If a public tool is missing, no accessible org has the tier or an active entitlement.
 - Public tools read the **`public_*` canonical model** — a *separate collection pipeline*
-  from the brand's own monitoring. The same brand's numbers can differ between the self
+  from the project's own monitoring. The same brand's numbers can differ between the self
   surface and the public surface; never reconcile one against the other.
 
 ## Locale convention (read this first)
@@ -87,7 +87,7 @@ re-collection would push the anchor) and never today (the window would slide dai
   `period` (30d default). Old all-history numbers **will not reconcile** with fresh pulls.
 - **Controls** (same on every windowed view): `range: 30d | 60d | 90d | all` (`all` = the
   pre-2026-09 all-history caliber; `90d` needs Advanced+ on the **organization the call runs
-  for** — the billed org on MCP, the brand's org in-app — otherwise clamped to 60d, the same
+  for** — the billed org on MCP, the current project's org in-app — otherwise clamped to 60d, the same
   clamp on MCP, Sidekick and the agent API since 2026-09) or an explicit `date_from` + `date_to`
   (both required; overrides `range`). An explicit window longer than 60 days is clamped the same
   way (end date kept, start pulled in). Two exceptions to the `window` echo below: the `days`

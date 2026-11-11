@@ -2,6 +2,23 @@
 
 All notable changes to the `geoly-mcp` agent skill.
 
+## 0.9.0
+
+- **"Project" now names the monitoring container; "brand" keeps meaning the brand itself.** A project is GEOly's monitoring unit: it tracks one own brand plus its competitors and is named after that brand (in the app: "Add Project", Settings › Project). For historical reasons a project's id is passed as `brand_id`, and tools such as `list_brands` list projects. Own-monitoring `brand_id` is never a `public_brand.id`.
+- **No machine name changes**: tool names (`list_brands`, `create_brand`, `get_brand_*` …), parameters (`brand_id`), response keys (`brand`, `brands`, `default_brand_id`, `organization_brand_count` …), error codes (`BRAND_LIMIT_REACHED`, `API_KEY_BRAND_REQUIRED` …), the `brand` permission resource, URL paths and CLI flags (`--brand`, `--brand_id`) are unchanged. Existing calls, scripts and error matching keep working.
+- **Descriptions and messages that meant the container now say project**: the shared `brand_id` parameter ("Project ID (legacy parameter name brand_id; NOT a public_brand.id) …"), `list_brands` (lists projects, under the legacy key `brands`), `get_brand_context` (`brand` = the project), `create_brand` and its error messages (e.g. `BRAND_LIMIT_REACHED: this organization already has as many projects as its plan allows …`), the scope errors ("This organization has multiple projects. Pass brand_id (the project id) explicitly …", "No project in scope."), the server instructions' discovery lines, and the public tools' notes on their own `brand_id` / `brand_ids` ("NOT a project id"). Error codes and the literal `brand_id` stay in those messages.
+- **Per-tool messages follow the same rule**: "… is not available for this project (not in its plan)", "Unknown topic_ids for this project", `Project "<id>" not found.`, "Monitored project … not found", "No authenticated project on this token …", "Project scope could not be resolved …". The Data API (REST) descriptions and OpenAPI now say each key is bound to one project and `data.brand` is that project; its paths, schema names and error codes are unchanged.
+- **Skill text**: hard rule 5 is now "Resolve the project before calling project-scoped tools"; discovery modes are single / multi-project / multi-org; tools-catalog § B–G are "Project-scoped"; CLI examples pass `--brand <project_id>` / `--brand_id <project_id>`; settings paths read Settings › Project › Brands and › Brand profile. Wording about brands as entities (your own brand, competitors, discovered and public brands, the brand library) is unchanged.
+
+## 0.8.2
+
+- **`displayed.sentiment` and `displayed.mentionRank` on `get_prompt_record_detail` (`displayed.mention_rank` on `GET /api/v1/records/{id}`) now use the same per-answer facts as the overview**: the brand counts as mentioned when its tracked name or alias appears in the answer, and the rank is among tracked brands only. Both are `null` when the brand is not mentioned or the answer is not counted yet. The raw `sentiment`, `sentimentScore`, `mentionRank`, `mentions` and `position` are unchanged and can disagree with the overview: quote `displayed.*`.
+
+## 0.8.1
+
+- **New tools `list_actions` and `get_action`** — the in-app Actions page (`/actions`): what to fix on the brand's own site, by severity, with status, affected pages, AI citations, and whether the latest check still finds it. `get_action` adds the steps, evidence and all affected pages on request. Read-only, free, same permission as the site audit tools.
+- Tool count: up to 57 per token (50 on a read-only multi-org connection).
+
 ## 0.8.0
 
 - **New tool `get_shopping_performance`** — the in-app AI Products page (`/shopping`): how your products show up in AI shopping cards on ChatGPT and Google AI Mode. Required `view`: `overview` (trigger rate, your appearance rate and shelf share, the brand board, seller board and prompts where you are absent), `products` (every product title seen; `own_only`, `search`, `sort`, `page`), `brand_products` (one brand's products, `brand_key` from `overview`) and `absent_prompts` (paged). Same read models as the page; boards are top-N, quote the `*Total` fields.

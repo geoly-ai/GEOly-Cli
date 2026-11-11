@@ -75,7 +75,7 @@ prompt-level breakdowns instead of re-deriving from raw citations.
    identical date coverage. If mention looks dense but citation looks sparse, you are reading
    a citation-event path, not the `brand_citations_daily` dataset.
 4. **Respect truncation.** Large responses are capped, and the marker differs by surface:
-   **brand tools** return structured `_truncated` / `_shownCount` / `_totalCount` fields (~60k
+   **project-scoped (own-monitoring) tools** return structured `_truncated` / `_shownCount` / `_totalCount` fields (~60k
    cap); **public & report tools** (~120k cap) return a JSON envelope
    `{ "_truncated": true, "_originalChars": …, "_message": …, "preview": "<beginning of the
    original JSON — NOT complete>" }`. Either way, paginate or narrow — do not assume you got
@@ -263,12 +263,12 @@ not reconcile field-by-field:
 
 ---
 
-## 9. Brand-side tools re-based on the in-app calibers (2026-09-20)
+## 9. Project-scoped tools re-based on the in-app calibers (2026-09-20)
 
-Four brand-scoped tools now read the **same functions the product pages use**. Where a field
+Four project-scoped tools now read the **same functions the product pages use**. Where a field
 changed meaning it was renamed or removed, never silently re-valued:
 
-1. **`get_competitor_list` = the brand library** (Settings › Brand › Brands), sourced from the
+1. **`get_competitor_list` = the brand library** (Settings › Project › Brands), sourced from the
    brand-entity layer instead of the legacy `competitor` table. A paged envelope
    (`rows[]`, `total`, `page`, `page_size`, `total_pages`, `counts`) — since 0.6.0; the earlier
    flat array overflowed the 60k output cap on libraries with a few hundred spellings and
@@ -322,11 +322,12 @@ dialog, `/prompts/[id]`). Old pulls will not reconcile field-by-field:
    when it failed to capture the answer metadata (85% of `false` values in the 2026-07-28 sample
    were mis-reports). `realtimeQueries` is the cleaned "AI searched for" list (prompt echoes
    dropped, de-duplicated); `webSearchQuery` is the raw stored list.
-3. **Status-bar gates** (`get_prompt_record_detail.displayed`): the dialog shows sentiment only
-   for `status=completed` answers with `mentions > 0`, and "#N" (`mentionRank`) only when another
-   brand entity was named in the same answer and `mentionRank > 0`. `displayed.sentiment` /
-   `displayed.mentionRank` are those gated values (`null` = not shown); the raw `sentiment` /
-   `mentionRank` fields are ungated and must not be quoted for un-mentioned answers.
+3. **Status-bar gates** (`get_prompt_record_detail.displayed`): `displayed.sentiment` /
+   `displayed.mentionRank` use the same per-answer facts as the overview: the brand counts as
+   mentioned when its tracked name or alias appears in the answer, and the rank is among tracked
+   brands only. Both are `null` when the brand is not mentioned or the answer is not counted yet.
+   The raw `sentiment` / `sentimentScore` / `mentionRank` / `mentions` / `position` fields are
+   legacy and can disagree with the overview: quote `displayed.*`.
 4. **Source counts** (`get_prompt_record_detail`): `citations` / `searchSources` / `shopping`
    are capped at 30 / 30 / 20 rows; the dialog's "N sources" is `citationTotal` (likewise
    `searchSourceTotal`, `shoppingTotal`); `*Truncated` flags a cut.
@@ -342,5 +343,5 @@ dialog, `/prompts/[id]`). Old pulls will not reconcile field-by-field:
    from captured shelf cards (`true` or `null`, never `false`); `null` on Perplexity / Gemini /
    Copilot / AI Overview. The `/shopping` trigger rate / trend count answers with ≥ 1
    captured shelf card — a different denominator from this flag.
-8. **`get_brand_search_queries` mode=`prompt_queries`** rejects a `prompt_id` outside the brand
+8. **`get_brand_search_queries` mode=`prompt_queries`** rejects a `prompt_id` outside the project
    with an error object (was an empty `recordsWithQueries=0` shell).
