@@ -16,6 +16,7 @@
     "preview:chat": "node --import tsx scripts/preview-chat.mts",
     "skill:bundle": "node scripts/gen-skill-bundle.mjs",
     "verify:retry": "tsx scripts/verify-retry.mts",
+    "verify:rate-limit": "node --import tsx scripts/verify-rate-limit.mts",
     "verify:org-picker": "tsx scripts/verify-org-picker.mts",
     "verify:picker": "tsx scripts/verify-picker-keys.mts"
   },

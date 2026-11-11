@@ -19,8 +19,31 @@ import { MCP_PROTOCOL_VERSION, VERSION } from './version.js';
 const TOOLS_CACHE_TTL_MS = 60_000;
 const RATE_LIMIT_MAX_ATTEMPTS = 3;
 const RATE_LIMIT_BUDGET_MS = 60_000;
-/** Server error codes (from the metering wrapper's JSON tail) that mean "wait, then the same call works". */
-const RATE_LIMIT_CODES = new Set(['GUARDED_RATE_LIMITED', 'CIRCUIT_OPEN']);
+/**
+ * Server error codes (from the metering wrapper's JSON tail) that mean "wait, then the same call works".
+ * `BUSY` = the concurrency gate (retry_after ≈ 2 s); `BUDGET_EXCEEDED` = the organization's hourly
+ * database budget (retry_after 1–3600 s). Both are retried in-process only when the wait fits
+ * RATE_LIMIT_BUDGET_MS (see callTool); a longer wait exits 4 at once with `retryAfter`.
+ */
+const RATE_LIMIT_CODES = new Set(['GUARDED_RATE_LIMITED', 'CIRCUIT_OPEN', 'BUSY', 'BUDGET_EXCEEDED']);
+
+/**
+ * Hint for the in-band load guards that carry their own advice. GUARDED_RATE_LIMITED and
+ * CIRCUIT_OPEN keep their existing (hint-less) output; only BUSY and BUDGET_EXCEEDED get one.
+ */
+function rateLimitHint(code: string, retryAfter: number | undefined): string | undefined {
+  if (code !== 'BUSY' && code !== 'BUDGET_EXCEEDED') return undefined;
+  const wait =
+    retryAfter !== undefined
+      ? `Retry the same call in about ${retryAfter}s.`
+      : 'Back off before retrying the same call.';
+  if (code === 'BUSY') return `${wait} Too many calls in flight — run fewer calls in parallel.`;
+  return (
+    `${wait} This organization's hourly database budget is used up (a load guard, not your credits). ` +
+    'If you need the answer text of many records, pass record_ids to get_prompt_record_detail to fetch them in batches; ' +
+    'a record\'s answer text never changes, so do not fetch records you already have again.'
+  );
+}
 
 /** All text blocks of a tool result joined — what a human would read. */
 function resultText(result: ToolCallResult): string {
@@ -333,7 +356,10 @@ export class McpClient {
    * The server never rate-limits a tool call at the HTTP layer (its metering contract is
    * "never break the connection"): a per-organization guard shows up as an `isError` result
    * with `retry_after_seconds` in its JSON tail. Honor it once, inside the same call budget,
-   * so a script does not have to know about the in-band shape. Timeouts are not retried
+   * so a script does not have to know about the in-band shape. A wait longer than that budget
+   * (BUDGET_EXCEEDED can ask for up to an hour) is never slept on here: the result goes back
+   * as is and unwrapToolResult turns it into `rate_limited` (exit 4) with `retryAfter`, so the
+   * calling script decides when to come back. Timeouts are not retried
    * here — the server asks for ~60s and the result is cached when it lands, so that is the
    * caller's decision.
    *
@@ -362,7 +388,7 @@ export class McpClient {
     if (tail && RATE_LIMIT_CODES.has(tail.error) && tail.retryAfter !== undefined) {
       const waitMs = tail.retryAfter * 1000;
       if (waitMs <= RATE_LIMIT_BUDGET_MS) {
-        warn(`geoly: ${name} is rate limited by the server — retrying once in ${tail.retryAfter}s`);
+        warn(`geoly: ${name} is rate limited by the server (${tail.error}) — retrying once in ${tail.retryAfter}s`);
         await sleep(waitMs);
         return this.request<ToolCallResult>('tools/call', { name, arguments: args }, reqOpts);
       }
@@ -480,7 +506,12 @@ export function unwrapToolResult(name: string, result: ToolCallResult): unknown 
     const tail = structuredErrorTail(result);
     const headline = (text.split('\n')[0] ?? '').trim() || `Tool "${name}" returned an error`;
     if (tail && RATE_LIMIT_CODES.has(tail.error)) {
-      throw new GeolyError('rate_limited', headline, { tool: name, retryAfter: tail.retryAfter, cause: tail.payload });
+      throw new GeolyError('rate_limited', headline, {
+        tool: name,
+        retryAfter: tail.retryAfter,
+        cause: tail.payload,
+        hint: rateLimitHint(tail.error, tail.retryAfter),
+      });
     }
     if (tail?.error === 'TOOL_TIMEOUT') {
       // The server's own timeout answer — shown verbatim (its prose is the actionable part), with
