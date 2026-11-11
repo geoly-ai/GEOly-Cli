@@ -1,9 +1,9 @@
 ---
 name: geoly-mcp
-description: "Use when querying or reporting on AI brand visibility through GEOly — via the geoly CLI (geoly run / geoly call) or the GEOly MCP server: routing a question to the right entry point, following the org/brand discovery flow, quoting the correct KPI caliber, and avoiding metric-definition pitfalls. Triggers: GEOly; geoly CLI; GEO / AI-visibility reporting; citation rate, mention rate, AIGVR, Share of Model; daily trends; competitor, category whitespace, brand momentum; any call to get_brand_overview / get_daily_trend / get_prompt_* / get_citation_* / get_category_* / get_public_* tools."
+description: "Use when querying or reporting on AI brand visibility through GEOly — via the geoly CLI (geoly run / geoly call) or the GEOly MCP server: routing a question to the right entry point, following the org/project discovery flow, quoting the correct KPI caliber, and avoiding metric-definition pitfalls. Triggers: GEOly; geoly CLI; GEO / AI-visibility reporting; citation rate, mention rate, AIGVR, Share of Model; daily trends; competitor, category whitespace, brand momentum; any call to get_brand_overview / get_daily_trend / get_prompt_* / get_citation_* / get_category_* / get_public_* tools."
 metadata:
   author: geoly
-  version: "0.8.0"
+  version: "0.9.0"
 ---
 
 # GEOly MCP
@@ -13,11 +13,18 @@ Google AI Mode, Google AI Overview, Gemini; Perplexity and Copilot are retired �
 2026-09-20 and 2026-10-11 respectively). The MCP server exposes **up to 55 tools** (the exact set depends
 on plan, mode, and write grants; a read-only multi-org connection sees 48) across two surfaces:
 
-- **Self / brand-own** — the customer's own monitoring, audits, GA4, and write actions.
+- **Self / own monitoring (project-scoped)** — the customer's own monitoring, audits, GA4, and write actions.
 - **Public / industry** — cross-brand competitive intelligence (Grow tier and above).
 
+**Projects and `brand_id`.** A project is GEOly's monitoring unit: it tracks one own brand plus its
+competitors. For historical reasons a project's id is passed as `brand_id`, and tools such as
+`list_brands` list projects. Own-monitoring `brand_id` is never a `public_brand.id` (the `brand_id`
+that public tools take is a public brand id — bridge with `resolve_my_brand_public`). Tool names,
+parameter names, response keys and error codes keep the word "brand"; elsewhere in this skill
+"brand" means the brand itself — your own brand, a competitor, a public brand.
+
 The data is correct; **most mistakes are caliber mistakes** (mixing aggregations of the same
-metric name) or **flow mistakes** (calling a brand tool before resolving which brand).
+metric name) or **flow mistakes** (calling a project-scoped tool before resolving which project).
 
 ## First: which door are you at? (decide this before anything else)
 
@@ -30,7 +37,7 @@ not by preference:
    hosted agent behind `run` already knows the calibers, routes the tools, handles timeouts and
    returns one receipt. The user installed the CLI precisely so that you would use it this way.
    `geoly call <tool>` is for a **specific raw pull** the user asked for by name, loops over many
-   brands/prompts, or exports to files — not for answering questions.
+   projects/prompts, or exports to files — not for answering questions.
    - **Version < 0.3.0** (no `run` subcommand): run `geoly upgrade` first (present since 0.1.0;
      self-updates the released binary) and re-check `geoly --version`. If it cannot upgrade
      (no route to the release host, not a released binary, user declines), **stay at this door
@@ -147,11 +154,12 @@ mention ≠ citation; AIGVR ≠ Share of Model; record-rate ≠ URL counts; the 
 two numbers disagree, it is almost always a caliber/window/platform mismatch — reconcile, don't
 guess.
 
-**5. Resolve the brand before calling brand tools, then orient once with `get_brand_context`.**
-In multi-brand / multi-org mode, call `list_brands` (and first `list_organizations`) and pass
-`brand_id`. If a brand tool errors asking which brand, run the discovery tools first. Once the
-brand is known, call `get_brand_context` **once** (free): it returns the brand and organization
-(with the profile fields and GA4 / Cloudflare readiness), today's dates on all three axes (UTC /
+**5. Resolve the project before calling project-scoped tools, then orient once with `get_brand_context`.**
+In multi-project / multi-org mode, call `list_brands` (it lists projects; first `list_organizations`)
+and pass the project id as `brand_id`. If a project-scoped tool errors asking which project, run the
+discovery tools first. Once the project is known, call `get_brand_context` **once** (free): it
+returns the project (key `brand`: its own brand's name, domain and profile fields) and organization
+(with GA4 / Cloudflare readiness), today's dates on all three axes (UTC /
 business day / `record_date_key`), the first-collection state, the entitled platforms and which of
 them have data in the last 30 days, topic ids plus the filter universe (countries, `_none`), the
 tracked competitors on the **entity caliber** (the brand library — same rows as
@@ -163,7 +171,7 @@ removed brands and learned spellings.
 **6. Recover from errors, don't loop.**
 A `402` / "subscription inactive" or a missing `get_public_*` tool is a gating signal, not a
 transient error — check mode, subscription, and plan tier before retrying. Respect truncation
-markers (`_truncated`/`_shownCount` on brand tools; a plain-text `[truncated …]` marker on
+markers (`_truncated`/`_shownCount` on project-scoped tools; a plain-text `[truncated …]` marker on
 public/report tools) and paginate (`currentPage == totalPages`) instead of assuming completeness.
 
 ## Connection & access (what affects your calls)
@@ -174,17 +182,19 @@ public/report tools) and paginate (`currentPage == totalPages`) instead of assum
   screen. The authorization maps to a user and the orgs they can access. A legacy read-only
   `Authorization: Bearer geom_…` static token is still accepted for headless/CI. You may pin a
   single org with `?org_id=<id>` (takes precedence over the consent org scope).
-- **Mode → discovery flow** (decides whether brand tools need a `brand_id`):
-  - **single** (one org, one brand, or brand-bound token) → brand tools auto-resolve; just call them.
-  - **multi-brand** (one org, many brands) → first `list_brands`, then pass `brand_id`.
+- **Mode → discovery flow** (decides whether project-scoped tools need a `brand_id`):
+  - **single** (one org with one project, or a token / API key bound to one project) →
+    project-scoped tools auto-resolve; just call them.
+  - **multi-project** (one org, several projects) → first `list_brands` (lists projects), then
+    pass the project id as `brand_id`.
   - **multi-org** (several orgs) → first `list_organizations`, then `list_brands`, then pass IDs.
-  - `org_id` / `brand_id` are accepted by every brand tool in every mode (0.6.0). A token that
-    cannot reach the requested org/brand gets an explicit error — it never silently falls back to
-    its own default brand. If you see "cannot access org_id …", the token was consented for one
-    org only: re-consent with all organizations (or use a token for that org).
+  - `org_id` / `brand_id` are accepted by every project-scoped tool in every mode (0.6.0). A token
+    that cannot reach the requested org/project gets an explicit error — it never silently falls
+    back to its own default project. If you see "cannot access org_id …", the token was consented
+    for one org only: re-consent with all organizations (or use a token for that org).
   - Numeric parameters (`page`, `page_size`, `limit`, …) also accept numeric strings ("2").
-  - In every mode, the first brand call of a session is `get_brand_context` (free, one shot):
-    brand + org (+ profile fields, GA4/Cloudflare readiness) + today + first-run state + platforms
+  - In every mode, the first project-scoped call of a session is `get_brand_context` (free, one shot):
+    project (`brand`) + org (+ brand profile fields, GA4/Cloudflare readiness) + today + first-run state + platforms
     (entitled ones included, even at 0 records) + topics + scope filters + entity-layer tracked
     competitors + data window + credits.
 - **Public discovery flow** (any cross-brand / `get_public_*` work): **① `get_public_coverage`
@@ -200,7 +210,7 @@ public/report tools) and paginate (`currentPage == totalPages`) instead of assum
   caveats of each view (units, window exceptions, "null ≠ 0" rules) are in the description of the
   `view` / `mode` / `section` / `source` / `window_caliber` parameter, and a parameter's own limits
   in that parameter's description — read them before quoting a view's numbers.
-- **Subscription gate**: single-org / single-brand context returns **HTTP 402** at entry if the
+- **Subscription gate**: single-org / single-project context returns **HTTP 402** at entry if the
   subscription is inactive. Multi-org validates **per target org at call time** and fails that
   org's tool call with an error message (not a 402).
 - **Public tools** require a **Grow-tier-or-above** plan (`grow | advanced | plus | enterprise`).
@@ -230,7 +240,7 @@ public/report tools) and paginate (`currentPage == totalPages`) instead of assum
 Credits come from one org-wide monthly pool (`get_quota` shows what is left). **The Cost line at
 the end of every tool description is the authoritative price** — read it before looping over a tool.
 
-- **Your own brand's monitoring reads cost credits per call** (since 2026-09-10): light 1 /
+- **Own-monitoring (project-scoped) reads cost credits per call** (since 2026-09-10): light 1 /
   standard 3 / deep 10 credits per call, whatever the page size — e.g. `get_brand_overview` 3,
   `get_citation_overview` 10 with `section="board"` / 3 with `section="table"`,
   `get_platform_matrix`, `get_topic_analytics` and `get_brand_search_queries` 10,
@@ -268,8 +278,8 @@ shipping a shallower report**:
    tool's "light/standard/deep" label. A single-object KPI (`get_public_brand` view=`visibility`)
    costs 10 — one row — while a 50-brand `leaderboard` costs 150 (50 rows × 3). Estimate such a call
    as `rows × per-row-rate`, and pass a `page_size`/`limit` no larger than you actually need (an
-   over-large request pre-holds more, refunded down to the rows actually returned). Own-brand
-   monitoring reads are the opposite — a flat price **per call** — so there one larger page is
+   over-large request pre-holds more, refunded down to the rows actually returned). Own-monitoring
+   (project-scoped) reads are the opposite — a flat price **per call** — so there one larger page is
    cheaper than several small ones.
 4. **Two-stage, quality-gated.** Cheap tools (`overview` views, `1`-credit lookups) are for
    **triage/locating** — deciding what's worth a deep read. But when the answer depends on
@@ -296,8 +306,8 @@ authoritative for flags — read it rather than guessing.
 **Answer a question: `geoly run` (the default move)**
 
 ```
-geoly run "<the user's question, in their words>"            # brand defaults to the signed-in brand
-geoly run "<question>" --brand <brand_id>                     # multi-brand tokens: pin the brand
+geoly run "<the user's question, in their words>"            # project defaults to the signed-in one
+geoly run "<question>" --brand <project_id>                   # several projects: pin one (the flag keeps its name)
 geoly run "weekly health" --spec weekly-brand-health          # server-defined deliverables
 geoly run "<question>" --max-credits 200                      # cap the spend
 ```
@@ -319,8 +329,8 @@ geoly run "<question>" --max-credits 200                      # cap the spend
 **Raw data: `geoly call` (only when the user asks for a specific pull, or for loops/exports)**
 
 - `geoly tools --json` — tool names come from the server at runtime; never assume.
-- `geoly call get_brand_context` (add `--brand_id <id>` in multi-brand orgs) as the first data
-  call of a script: one JSON object with the brand, today's dates, the entitled platforms and
+- `geoly call get_brand_context` (add `--brand_id <project_id>` when the org has several projects)
+  as the first data call of a script: one JSON object with the project, today's dates, the entitled platforms and
   which have data, topic ids, the tracked competitors (entity ids + legacy ids) and remaining
   credits — feed those into the loop instead of calling `get_current_date` /
   `get_competitor_list` / `get_public_coverage` view=`platforms` per iteration.
@@ -358,10 +368,10 @@ decide by what you have:**
 
 ## Tool selection — question → tool
 
-### Self / brand-own
+### Self / own monitoring (project-scoped)
 | You want… | Use |
 |---|---|
-| Orientation first: brand/org, today's dates, entitled + with-data platforms, topic & filter ids, entity-layer tracked competitors, credits | `get_brand_context` (free, once per run) |
+| Orientation first: project/org, today's dates, entitled + with-data platforms, topic & filter ids, entity-layer tracked competitors, credits | `get_brand_context` (free, once per run) |
 | Headline KPI (AIGVR / mention / citation rate, whole window) | `get_brand_overview` |
 | Daily/weekly **trend** of those metrics (the `/overview` trend chart) | `get_daily_trend` `breakdown="platform"` (or `"total"`); `totals` = the window values of the same rows |
 | This period **vs the previous one** (week-over-week, month-over-month) with `days_with_data` | `get_daily_trend` with `compare_previous=true` (per-row and `totals` `previous.*` / `delta.*`) |
@@ -371,7 +381,7 @@ decide by what you have:**
 | Which competitors does the AI prefer **instead of** us, answer by answer (`weLose` per rival — the page's "who beats you" board; no weWin/tie any more) | `get_verdict` `view="competitors"` |
 | Which cited sites ride along with **negative** aspect judgments of us (Verdict › Sources tab: `kind`, `citedRecords`, `negativeShare`) | `get_verdict` `view="sources"` (default 7d — the page shows 30d) |
 | A prompt's **full execution history** over a range (per-day records, e.g. 30-day shopping-card trend) | `list_prompt_records` (explicit `start_date`/`end_date` are UTC+8 business days) |
-| **Read the actual answers** brand-wide — every AI answer in the window, filtered by topic / tag / country / platform / "mentions entity X" / "mentions us", paginated (= in-app /answers) | `list_brand_answers` (`answerSummary` + `entities[]` + `sources[]` per row; drill one row with `get_prompt_record_detail`) |
+| **Read the actual answers** project-wide — every AI answer in the window, filtered by topic / tag / country / platform / "mentions entity X" / "mentions us", paginated (= in-app /answers) | `list_brand_answers` (`answerSummary` + `entities[]` + `sources[]` per row; drill one row with `get_prompt_record_detail`) |
 | The actual **citation URLs / sources** for a prompt | `get_prompt_citations` (`deduplicate=true` for a source list) |
 | "Which queries never mention us" (blind spots) | `get_prompt_list` `view="mention_rates"` (worst first by default) |
 | Citation **domain distribution / ownership** | `get_citation_overview` (counts URLs, not records; window = N whole +08 calendar days + today on the citation-creation axis — read `caliber` + `window` from the response) |
@@ -382,7 +392,7 @@ decide by what you have:**
 | How AI *describes* the brand (verbatim) | `list_brand_answers` `view="mention_samples"`; vs rivals → `get_competitor_cooccurrence` |
 | Topic-level analysis | `get_topic_list` (ids, free) → `get_topic_analytics` (pass `topic_ids`) or `get_daily_trend` `breakdown="topic"` for day-level topic trends |
 | Sentiment (brand-wide distribution / daily trend / per platform — no verbatim highlights, use `list_brand_answers` `view="mention_samples"` for those) | `get_sentiment_dashboard` |
-| The brand library (own brand + tracked competitors + system suggestions + removed), same rows as Settings › Brand | `get_competitor_list` (competitors = `status="tracked"` and `is_own_brand=false`) |
+| The brand library (own brand + tracked competitors + system suggestions + removed), same rows as Settings › Project › Brands | `get_competitor_list` (competitors = `status="tracked"` and `is_own_brand=false`) |
 | Site AI-readiness audit | `get_audit_list` → `get_audit_detail` (the report header + single-page checks + fix copy in `checksMeta`) → `get_audit_detail` `section="pages"` for a site audit's per-page results / `fetch_quality=unusable` pages |
 | Traffic (if GA4 connected) | `get_traffic_data` `source="ga4"` (add `page_path` for one page). Whole-site vs AI-referred fields live in the same payload — see the catalog row before quoting a number; the page opens on 7d, the tool defaults to 30d |
 | AI crawlers hitting the site (if Cloudflare connected) | `get_traffic_data` `source="cloudflare"` — bots fetching pages, **not** visitors arriving from AI answers (that is `source="ga4"`). Two calibers to keep straight: `changes.blockedEvents` is always `null` (never computed), and `blockedEvents[]` is capped at 50 rows (`blocked_events_limit`) — quote per-crawler block counts from the uncapped `blockedCrawlerSummary` |
@@ -436,7 +446,7 @@ citation-creation axis plus today** (matches the /sources/citations page), not t
 `now − N×24h` preset window of `get_brand_overview` (whose `custom` range is instead an exact
 +08 business-day span, echoed as full ISO instants) — never subtract one from the other; quote the
 `window` each response returns. Their `platform` (and `get_url_detail`'s rolling caliber)
-must be `all` or an **active** platform the brand is entitled to
+must be `all` or an **active** platform the project is entitled to
 (exactly the page's platform chips) — an unknown, un-entitled or retired code (e.g. a
 `claude` / `grok` entry left in an old entitlement list) returns `{ error }` listing the
 allowed codes, never a silent fall-back to all. Shares: the page shows one decimal — format
@@ -447,7 +457,7 @@ the old query ran instead — its `window` then differs by tool: `get_citation_o
 day-granular, not an instant); `get_domain_detail` / `get_url_detail` (page caliber) report an exact
 `start..end` instant pair on citation `created_at` (rolling N×24h). Quote whichever you got.
 
-> No deprecated aliases are listed (0.7.0): the brand-own and public old names — including the
+> No deprecated aliases are listed (0.7.0): the own-monitoring and public old names — including the
 > 0.6.x forwarding aliases — left `tools/list`. `/api/mcp/v1` (also served at `/api/mcp`) is MCP v1
 > (`GEOly-MCP-Version: 1`); the 34 old names are not part of v1: they stay hidden and callable until 2026-11-30 and are then
 > removed (the three non-drop-in ones — `get_competitor_overview`, `get_brand_citations_daily`,
