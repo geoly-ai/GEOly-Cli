@@ -2,6 +2,27 @@
 
 All notable changes to the `geoly-mcp` agent skill.
 
+## 0.9.4
+
+- **Removed-tool migration notes no longer quote old prices.** The `get_competitor_overview`, `get_brand_citations_daily` and `query_analytics` rows in the tools catalog still said their replacements cost 10 / 1 / 1 credits per call. Those replacements read your own project, so they are free; the rows now say so (per-minute guards and timeouts unchanged). No tool behaviour changed.
+
+## 0.9.3
+
+- **Reading your own project no longer uses credits.** Own-monitoring (project-scoped) reads — `get_brand_overview`, `get_citation_overview`, `get_platform_matrix`, `get_topic_analytics`, `get_daily_trend`, `list_brand_answers`, `list_prompt_records`, `get_prompt_record_detail` and the other project tools — are free again; their Cost line now says so. Only industry data (`get_public_*` / `get_category_*` and the other public tools) spends credits, at unchanged prices. The pool is now called **industry data credits** (the `get_quota` fields are unchanged). Per-minute rate guards on the heavy project reads still apply.
+
+## 0.9.2
+
+- **`previousHasFirstRun` on period comparisons**: `get_citation_overview` (board and table), `get_search_queries` (overview) and `get_verdict` (`view="competitors"`, `view="sources"`). `true` means the previous window contains the project's first-run day, when each prompt × platform got about 3 answers instead of 1, so count deltas are not comparable. Rates are not affected.
+- **`get_citation_overview` board `trend.firstDay`** (`first_date` on the Data API citations overview) is now also set when the project's first answer falls exactly on the window's first day; it used to be `null` in that case. It still means "the axis starts at the project's first day", so the first bucket is not partial.
+- **`get_brand_context` returns `brand.profile`**: the brand profile of the project — `description`, `industry`, `brand_identity`, `products_and_services` (names only) and `personas`, each `{ value, source }`. `source: "customer"` = entered by the customer; `"website"` = read from the brand's own website by GEOly and not edited by the customer; `value: null` = unknown. The top-level `brand.industry` / `brand.description` carry the same values.
+
+## 0.9.1
+
+- **`get_prompt_record_detail` reads many records in one call**: pass `record_ids` (1–100 ids of one project; duplicates are dropped) instead of `record_id`. It returns `{ records, returned, missing_ids, deferred_ids }` — `records[]` are the same per-record objects as the single form, in the order you passed, with three differences: no `answerMarkdown`; `citations` / `searchSources` come sorted by position / rank (with more than 30 citations you get the 30 best-positioned ones); the reply holds whole records only. Ids that did not fit the reply's size budget come back in `deferred_ids` (send them again; a one-line `next` hint accompanies a non-empty list), ids that do not exist or belong to another project in `missing_ids`. The first id must be a real record — it decides the project, and an unknown first id fails the call like the single form. One batch costs the same as one call. Passing `record_id` behaves exactly as before; pass one of the two, not both.
+- **`max_response_chars` — the reply's size budget for `record_ids`** (20,000–3,000,000, default 60,000). The default is sized for a model's context: about 4–5 full answers per call. A script that saves the reply to a file (CLI / MCP) can raise it to 3,000,000, and all 100 records then normally arrive in one call. The reply never exceeds the budget: only when one record alone is larger is its `answerText` cut to fit, and its id is listed in `truncated_ids`. Hosted agents (Sidekick, Agent API) are capped at 60,000 whatever they pass.
+- **Stop looping one call per record.** The skill used to send scripts down "list, then one detail call per row"; it now says to batch with `record_ids` and to keep what was fetched — a completed answer's text never changes.
+- **`BUDGET_EXCEEDED` and `BUSY` are walls with a timer**: both carry `retry_after_seconds`; wait that long instead of retrying every minute. `BUDGET_EXCEEDED` is an hourly per-organization load guard, not the credit quota.
+
 ## 0.9.0
 
 - **"Project" now names the monitoring container; "brand" keeps meaning the brand itself.** A project is GEOly's monitoring unit: it tracks one own brand plus its competitors and is named after that brand (in the app: "Add Project", Settings › Project). For historical reasons a project's id is passed as `brand_id`, and tools such as `list_brands` list projects. Own-monitoring `brand_id` is never a `public_brand.id`.

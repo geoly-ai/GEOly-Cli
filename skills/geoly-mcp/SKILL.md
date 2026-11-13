@@ -3,7 +3,7 @@ name: geoly-mcp
 description: "Use when querying or reporting on AI brand visibility through GEOly — via the geoly CLI (geoly run / geoly call) or the GEOly MCP server: routing a question to the right entry point, following the org/project discovery flow, quoting the correct KPI caliber, and avoiding metric-definition pitfalls. Triggers: GEOly; geoly CLI; GEO / AI-visibility reporting; citation rate, mention rate, AIGVR, Share of Model; daily trends; competitor, category whitespace, brand momentum; any call to get_brand_overview / get_daily_trend / get_prompt_* / get_citation_* / get_category_* / get_public_* tools."
 metadata:
   author: geoly
-  version: "0.9.0"
+  version: "0.9.4"
 ---
 
 # GEOly MCP
@@ -37,7 +37,9 @@ not by preference:
    hosted agent behind `run` already knows the calibers, routes the tools, handles timeouts and
    returns one receipt. The user installed the CLI precisely so that you would use it this way.
    `geoly call <tool>` is for a **specific raw pull** the user asked for by name, loops over many
-   projects/prompts, or exports to files — not for answering questions.
+   projects/prompts, or exports to files — not for answering questions. A loop that needs many
+   answers' full detail must **batch**: `get_prompt_record_detail` takes `record_ids` (up to 100
+   per call) — never one call per record (see "Raw data" below).
    - **Version < 0.3.0** (no `run` subcommand): run `geoly upgrade` first (present since 0.1.0;
      self-updates the released binary) and re-check `geoly --version`. If it cannot upgrade
      (no route to the release host, not a released binary, user declines), **stay at this door
@@ -237,14 +239,14 @@ public/report tools) and paginate (`currentPage == totalPages`) instead of assum
 
 ## What costs credits (and what's free)
 
-Credits come from one org-wide monthly pool (`get_quota` shows what is left). **The Cost line at
-the end of every tool description is the authoritative price** — read it before looping over a tool.
+Credits (the **industry data credits**) come from one org-wide monthly pool (`get_quota` shows what
+is left). **Only industry data costs credits — anything about your own project is free.** **The Cost
+line at the end of every tool description is the authoritative price** — read it before looping over a tool.
 
-- **Own-monitoring (project-scoped) reads cost credits per call** (since 2026-09-10): light 1 /
-  standard 3 / deep 10 credits per call, whatever the page size — e.g. `get_brand_overview` 3,
-  `get_citation_overview` 10 with `section="board"` / 3 with `section="table"`,
-  `get_platform_matrix`, `get_topic_analytics` and `get_brand_search_queries` 10,
-  `get_daily_trend` 1. Several are also rate-guarded per minute.
+- **Own-monitoring (project-scoped) reads are free** (since 2026-11-12): `get_brand_overview`,
+  `get_citation_overview`, `get_platform_matrix`, `get_topic_analytics`, `get_brand_search_queries`,
+  `get_daily_trend`, `list_brand_answers`, `list_prompt_records` and the rest of the project tools do
+  not use credits. Several are still rate-guarded per minute.
 - **Public / industry-intelligence tools** (Grow-tier or above): the cross-brand `get_public_*` and
   `get_category_*` tools are paid per view (e.g. `get_public_topic` view=`difficulty`: 3 per call
   with a `topic_id`, 1 with a `prompt_id`, 10 with a `product_space_id`); the ranked-content
@@ -279,8 +281,8 @@ shipping a shallower report**:
    costs 10 — one row — while a 50-brand `leaderboard` costs 150 (50 rows × 3). Estimate such a call
    as `rows × per-row-rate`, and pass a `page_size`/`limit` no larger than you actually need (an
    over-large request pre-holds more, refunded down to the rows actually returned). Own-monitoring
-   (project-scoped) reads are the opposite — a flat price **per call** — so there one larger page is
-   cheaper than several small ones.
+   (project-scoped) reads cost nothing, but still request one larger page instead of several small
+   ones — fewer calls are faster and stay clear of the per-minute rate guards.
 4. **Two-stage, quality-gated.** Cheap tools (`overview` views, `1`-credit lookups) are for
    **triage/locating** — deciding what's worth a deep read. But when the answer depends on
    evidence (rankings, momentum, perception, per-prompt records, competitive standing), you
@@ -295,6 +297,10 @@ shipping a shallower report**:
    unlimited, never "overdrawn"). When a
    `QUOTA_EXCEEDED` says `max_affordable_limit`, retry the same tool with `page_size`/`limit` set
    to that value — a smaller page still returns everything for a small topic.
+   `BUDGET_EXCEEDED` (an hourly per-organization load guard, not your credits) and `BUSY` both
+   carry `retry_after_seconds`: wait that long, do not hammer. A script that hits
+   `BUDGET_EXCEEDED` is making too many small calls — batch them (`record_ids`) and stop
+   re-reading records it already has.
 
 ## GEOly CLI — how an agent uses it
 
@@ -338,6 +344,19 @@ geoly run "<question>" --max-credits 200                      # cap the spend
 - `geoly call <tool> --<param> <value> ...` — flags use schema parameter names **verbatim**
   (`--brand_id`, `--time_range 30d`); arrays/objects take JSON strings; whole-object via
   `--data '<json>'` or stdin via `--input -`. Results go to stdout as JSON (pipe to files).
+- **Many answers at once** (reading the AI's actual words across a window): list the ids
+  (`list_prompt_records` / `list_brand_answers`), then
+  `geoly call get_prompt_record_detail --data '{"record_ids":["<id>","<id>",…],"include_answer_text":true,"max_response_chars":3000000}' > batch-001.json`
+  — up to 100 ids of one project per call, one call's cost. The reply is
+  `{ records, returned, missing_ids, deferred_ids }` and holds **whole records only**: send
+  `deferred_ids` again until it is empty; `missing_ids` = not found for this project (the
+  first id must be a real record — it decides the project). `max_response_chars` is the
+  reply's size budget: **set it to 3000000 only when the output is redirected to a file** (all
+  100 records then normally arrive in one call); leave it out when the reply lands in a model's
+  context (default 60,000 characters ≈ 4–5 full answers per call; hosted agents are capped
+  there). Only a record that alone is larger than the budget has its `answerText` cut to fit —
+  its id is then listed in `truncated_ids`. Save what you fetch and skip ids you already have
+  — a completed answer's text never changes, so re-pulling it is pure waste.
 - A `tool_error` on a heavy tool means the server timed out; narrow the window or use
   `geoly run` instead of retrying the same call.
 
@@ -381,7 +400,7 @@ decide by what you have:**
 | Which competitors does the AI prefer **instead of** us, answer by answer (`weLose` per rival — the page's "who beats you" board; no weWin/tie any more) | `get_verdict` `view="competitors"` |
 | Which cited sites ride along with **negative** aspect judgments of us (Verdict › Sources tab: `kind`, `citedRecords`, `negativeShare`) | `get_verdict` `view="sources"` (default 7d — the page shows 30d) |
 | A prompt's **full execution history** over a range (per-day records, e.g. 30-day shopping-card trend) | `list_prompt_records` (explicit `start_date`/`end_date` are UTC+8 business days) |
-| **Read the actual answers** project-wide — every AI answer in the window, filtered by topic / tag / country / platform / "mentions entity X" / "mentions us", paginated (= in-app /answers) | `list_brand_answers` (`answerSummary` + `entities[]` + `sources[]` per row; drill one row with `get_prompt_record_detail`) |
+| **Read the actual answers** project-wide — every AI answer in the window, filtered by topic / tag / country / platform / "mentions entity X" / "mentions us", paginated (= in-app /answers) | `list_brand_answers` (`answerSummary` + `entities[]` + `sources[]` per row; drill one row with `get_prompt_record_detail`, or many rows in one call with its `record_ids`) |
 | The actual **citation URLs / sources** for a prompt | `get_prompt_citations` (`deduplicate=true` for a source list) |
 | "Which queries never mention us" (blind spots) | `get_prompt_list` `view="mention_rates"` (worst first by default) |
 | Citation **domain distribution / ownership** | `get_citation_overview` (counts URLs, not records; window = N whole +08 calendar days + today on the citation-creation axis — read `caliber` + `window` from the response) |
