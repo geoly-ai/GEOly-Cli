@@ -2,6 +2,10 @@
 
 All notable changes to the `geoly-mcp` agent skill.
 
+## 0.9.5
+
+- **`get_domain_detail` timeout 15s → 45s.** On the largest projects a cold-cache 30d call on a heavily cited domain needs about 17–26s on the database (its page and prompt breakdowns read raw citation rows), so it failed at 15s. Like the other 45s project reads, on the Agent API (and in the MCP per-organization heavy-call limit) it now passes through the heavy-tool gate. Its main result is not cached, so after a timeout an identical retry is not faster — narrow `time_range` or pass a `platform`. Parameters and output are unchanged.
+
 ## 0.9.4
 
 - **Removed-tool migration notes no longer quote old prices.** The `get_competitor_overview`, `get_brand_citations_daily` and `query_analytics` rows in the tools catalog still said their replacements cost 10 / 1 / 1 credits per call. Those replacements read your own project, so they are free; the rows now say so (per-minute guards and timeouts unchanged). No tool behaviour changed.
