@@ -3,7 +3,7 @@ name: geoly-mcp
 description: "Use when querying or reporting on AI brand visibility through GEOly — via the geoly CLI (geoly run / geoly call) or the GEOly MCP server: routing a question to the right entry point, following the org/project discovery flow, quoting the correct KPI caliber, and avoiding metric-definition pitfalls. Triggers: GEOly; geoly CLI; GEO / AI-visibility reporting; citation rate, mention rate, AIGVR, Share of Model; daily trends; competitor, category whitespace, brand momentum; any call to get_brand_overview / get_daily_trend / get_prompt_* / get_citation_* / get_category_* / get_public_* tools."
 metadata:
   author: geoly
-  version: "0.9.5"
+  version: "0.9.8"
 ---
 
 # GEOly MCP
@@ -222,7 +222,7 @@ public/report tools) and paginate (`currentPage == totalPages`) instead of assum
   `get_public_sources_overview` / `get_public_source_domain_detail` /
   `get_public_source_brand_conduit` — are NOT plan-gated and are **free**: every token has
   them and they never consume quota credits.)
-- **Writes** (`create_prompt`, `create_topic`, `create_competitor`, `trigger_prompt`, `archive_prompt`, `update_prompt_tags`, `move_prompts_to_topic`) require
+- **Writes** (`create_prompt`, `create_topic`, `create_competitor`, `trigger_prompt`, `archive_prompt`, `update_prompt_tags`, `move_prompts_to_topic`, `generate_prompt_suggestions`, `finalize_prompt_suggestions`, `update_prompt_suggestions`) require
   **write access granted on the OAuth consent screen** (a per-resource read/write grid; the
   default is all-read, no-write). The legacy `geom_` static token is always read-only, and
   **multi-org connections are always read-only** (write grants are clamped). `trigger_prompt`
@@ -354,9 +354,15 @@ geoly run "<question>" --max-credits 200                      # cap the spend
   reply's size budget: **set it to 3000000 only when the output is redirected to a file** (all
   100 records then normally arrive in one call); leave it out when the reply lands in a model's
   context (default 60,000 characters ≈ 4–5 full answers per call; hosted agents are capped
-  there). Only a record that alone is larger than the budget has its `answerText` cut to fit —
-  its id is then listed in `truncated_ids`. Save what you fetch and skip ids you already have
-  — a completed answer's text never changes, so re-pulling it is pure waste.
+  there). Only a record that alone is larger than the budget has its `answerText` /
+  `answerMarkdown` cut to fit — its id is then listed in `truncated_ids`. Save what you fetch
+  and skip ids you already have — a completed answer's text never changes, so re-pulling it is
+  pure waste. Every record carries `answerLinks` — the links the AI wrote into the answer body
+  (`url`, `linkText`, `position`, `isOwnBrand`; ChatGPT only): read those for "does the answer
+  link to a shop / to our site" instead of parsing text. Need the raw markup itself (product-card
+  images, where a link sits)? Add `"include_answer_markdown":true` — the batch form returns
+  `answerMarkdown` only then; ids whose markdown could not be read in time come back in
+  `deferred_ids`, and an `OVERLOADED` reply means none could be read — retry in a minute.
 - A `tool_error` on a heavy tool means the server timed out; narrow the window or use
   `geoly run` instead of retrying the same call.
 
@@ -419,6 +425,7 @@ decide by what you have:**
 | Archive / restore a prompt | `archive_prompt` (write grant; `restore=true` to bring it back; idempotent). Archived prompts refuse `trigger_prompt` until restored |
 | Tag prompts in bulk / rename a tag | `update_prompt_tags` (write grant): `action=add\|remove` with `prompt_ids` + `tags`; `action=rename` with `old_name` + `new_name` |
 | Move prompts to a topic / ungroup | `move_prompts_to_topic` (write grant): `prompt_ids` + `topic_id` from `get_topic_list`, or `topic_id=null` |
+| Find new prompts to monitor (Discovery) | `generate_prompt_suggestions` (write grant, async) → poll `get_prompt_suggestion_generation` → `list_prompt_suggestions` (with relative search volume) → `finalize_prompt_suggestions` (accept = start monitoring, same id; reject = never suggested again) / `update_prompt_suggestions`. Suggestions are not prompts until accepted and appear in no other tool |
 
 > `display_data` / `display_chart` and `web_search` / `fetch_page` are **in-app agent only** —
 > not exposed over MCP. MCP results are plain JSON (no `_ref`).
