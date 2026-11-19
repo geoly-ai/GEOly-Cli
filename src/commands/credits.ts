@@ -13,8 +13,9 @@ import { GeolyCommand } from './base.js';
 
 interface Pool {
   quota_limit?: number;
-  used?: number;
-  remaining?: number;
+  /** null: the server hides usage from this caller (project member in a project-isolated organization; see `note`) */
+  used?: number | null;
+  remaining?: number | null;
   resets_at?: string;
   available?: boolean;
 }
@@ -65,7 +66,11 @@ function renderOrg(o: OrgQuota): string {
 function renderPool(p: Pool): string {
   if (p.available === false) return 'n/a';
   if (p.quota_limit === undefined) return 'n/a';
-  if (p.quota_limit < 0) return `unlimited (used ${p.used ?? 0})`;
+  // used / remaining = null: the server deliberately hides organization-wide usage from this caller.
+  // Never render that as 0 — "used 0" / "0 remaining" would be wrong either way.
+  const used = p.used === null ? 'usage not shown' : `used ${p.used ?? 0}`;
+  if (p.quota_limit < 0) return `unlimited (${used})`;
   const resets = p.resets_at ? ` · resets ${p.resets_at.slice(0, 10)}` : '';
-  return `${p.remaining ?? 0} / ${p.quota_limit} remaining (used ${p.used ?? 0})${resets}`;
+  if (p.remaining === null) return `limit ${p.quota_limit} (${used})${resets}`;
+  return `${p.remaining ?? 0} / ${p.quota_limit} remaining (${used})${resets}`;
 }
